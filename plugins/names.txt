@@ -14,3 +14,4 @@
 ccch1mneyyy/dsh-TUI face=tui
 TonyDua/dsh-web-search-exa
 FWW321/dsh-web-search-zhipu
+FWW321/dsh-web-fetch-zhipu

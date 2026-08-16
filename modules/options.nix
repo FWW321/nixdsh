@@ -153,6 +153,103 @@ in
       '';
     };
 
+    # webFetch = fetch 缝的同款选择器形态(缝对称性,README「网页抓取」
+    # 节):search/fetch 两套同构注册表,差异只在生态 —— fetch 缝 rc.6
+    # 无 base 自带 provider(官方匿名 HTTP provider 因 SSRF 未发布,
+    # base 的 tool-web fetch: false 保险丝),故选中必是声明后端,
+    # 且须显式打开 tool-web.fetch(模块代劳)
+    webFetch = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "zhipu";
+      description = ''
+        网页抓取能力开关 + fetch provider 选择器(fetch 缝,与
+        webSearch 对称)。null(默认)= 禁用:维持 base 现状
+        (tool-web fetch: false,fetch 注册表空)。str = 启用并选中
+        该 provider id —— 必须在 webFetchProviders 声明表内(fetch
+        缝无 base 自带后端);模块同时重述 tool-web 行 fetch: true
+        (base 的 SSRF 保险丝,委托型 provider 无此面,显式打开)。
+        选择器 id 未声明 → 求值期 fail-loud。SSRF 责任在上游规则里
+        归 provider:委托型(远端 reader)平凡满足,本机抓取型须自证。
+      '';
+    };
+
+    webFetchProviders = lib.mkOption {
+      # 开放注册表,镜像 webSearchProviders;无 base 自带形态(裸 attrs
+      # 无意义 —— 没有"官方后端参数"可调),一律完整声明
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          row = lib.mkOption {
+            type = lib.types.submodule {
+              options = {
+                name = lib.mkOption {
+                  type = lib.types.str;
+                  example = "@fww/dsh-web-fetch-zhipu";
+                  description = "cordis 包名(insert 行 name)";
+                };
+                id = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  description = "行 id 覆盖;null 缺省 web-fetch-<包名尾段>";
+                };
+                config = lib.mkOption {
+                  type = lib.types.attrs;
+                  default = { };
+                  description = "行引导配置(如 apiKeyEnv)";
+                };
+                secretFile = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  example = "/run/secrets/zhipu_api_key";
+                  description = ''
+                    凭据文件路径;声明后 wrapper 启动时读文件 export
+                    环境变量(env 名 = row.config.apiKeyEnv 显式值 >
+                    文件名大写约定),同 webSearchProviders.row.secretFile。
+                  '';
+                };
+                settingsNamespace = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  description = "settings 段名覆盖;null 缺省 web-fetch-<后端 id>";
+                };
+              };
+            };
+            description = "fetch 后端完整声明(缝无 base 自带,一律带 name)";
+          };
+          source = lib.mkOption {
+            type = lib.types.nullOr (lib.types.oneOf [ lib.types.package lib.types.path ]);
+            default = null;
+            description = ''
+              包源(pkgs.dshPlugins.<name> derivation 或 path);
+              null 缺省 registry 尾名反查(row.id)。
+            '';
+          };
+          settings = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+            description = "该后端 settings 命名空间段参数(热生效);仅选中时渲染";
+          };
+        };
+      });
+      default = { };
+      example = lib.literalExpression ''
+        {
+          zhipu = {
+            row = {
+              name = "@fww/dsh-web-fetch-zhipu";
+              secretFile = "/run/secrets/zhipu_api_key";
+            };
+            settings.returnFormat = "markdown";
+          };
+        }
+      '';
+      description = ''
+        webFetch 后端声明表(开放注册表,镜像 webSearchProviders)。
+        声明 ≠ 启用:仅被 webFetch 选中的后端在场(备案待命)。
+        webFetch = null × 本表非空 → 求值期 fail-loud(同 webSearch)。
+      '';
+    };
+
     webSearchProviders = lib.mkOption {
       # 开放注册表(README:选择器指向的注册表是开放的):
       # - 裸 attrs = base 自带后端(deepseek-official)的纯参数

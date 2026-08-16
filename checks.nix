@@ -333,6 +333,19 @@ let
           };
         };
       }) "secretEnv: same derived env from different files must throw")
+      # fetch 缝负例:未知 id / 表非空×null / inBox 禁 tool-web
+      (tryThrow (mkApply {
+        webFetch = "zhipu";
+      }) "fetch: webFetch = zhipu without a webFetchProviders.zhipu declaration must throw (no base-shipped fetch backend)")
+      (tryThrow (mkApply {
+        webFetch = null;
+        webFetchProviders.zhipu.row.name = "@fww/dsh-web-fetch-zhipu";
+      }) "fetch: webFetchProviders non-empty + webFetch = null must throw (declared backends would never run)")
+      (tryThrow (mkApply {
+        webFetch = "zhipu";
+        webFetchProviders.zhipu.row.name = "@fww/dsh-web-fetch-zhipu";
+        inBoxPlugins."tool-web".enable = false;
+      }) "fetch: webFetch set + inBoxPlugins disabling tool-web must throw")
     ]) "touch $out");
 
   # secretFile 桥:声明 → 行 config 派生 apiKeyEnv(行自描述)+ wrapper
@@ -530,6 +543,117 @@ let
       touch $out
     '';
 
+  # fetch 缝行组正例:选中 zhipu fetch 后端 → insert 行 + web 行
+  # fetchProvider 重述 + tool-web fetch:true 保险丝打开;未选中后端禁行;
+  # 包源进 profile。负例(未知 id/表非空×null/inBox 禁 tool-web)进 clash
+  fetchRows =
+    let
+      mk = cfg: dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = ({
+          plugins = { };
+          profiles = { default = { }; };
+          inBoxPlugins = { };
+        } // cfg);
+      };
+      sel = mk {
+        webFetch = "zhipu";
+        webFetchProviders.zhipu = {
+          row = {
+            name = "@fww/dsh-web-fetch-zhipu";
+            secretFile = "/run/secrets/zhipu_api_key";
+          };
+        };
+      };
+      # 备案:两个后端声明,选中其一 → 另一禁行
+      both = mk {
+        webFetch = "zhipu";
+        webFetchProviders = {
+          zhipu.row.name = "@fww/dsh-web-fetch-zhipu";
+          other.row.name = "@example/dsh-web-fetch-other";
+        };
+      };
+      rows = sel.wfRows;
+      rowOf = id: builtins.head (pkgs.lib.filter (r: r.id == id) rows);
+      bothIds = map (r: r.id) both.wfRows;
+      st = dshLib.renderSettings {
+        settings = { };
+        telemetry = { mode = null; };
+        webSearch = null;
+        webSearchProviders = { };
+        llmDeepseek = null;
+        webFetch = "zhipu";
+        webFetchProviders.zhipu = {
+          row.name = "@fww/dsh-web-fetch-zhipu";
+          settings.returnFormat = "text";
+        };
+        providers = { };
+        defaultModel = null;
+      };
+      bothDisabled = map (r: r.id) (pkgs.lib.filter (r: r ? disabled) both.wfRows);
+    in
+    pkgs.runCommand "dsh-fetch-rows-check" { } (builtins.deepSeq ([
+      (pkgs.lib.assertMsg ((map (r: r.id) rows) == [ "web-fetch-zhipu" "web" "tool-web" ])
+        "fetch: selecting zhipu must emit insert row + web fetchProvider restatement + tool-web fetch:true fuse")
+      (pkgs.lib.assertMsg ((rowOf "web-fetch-zhipu").config.apiKeyEnv == "ZHIPU_API_KEY")
+        "fetch: row.secretFile must derive apiKeyEnv (uppercase filename convention)")
+      (pkgs.lib.assertMsg ((rowOf "web").config.fetchProvider == "zhipu")
+        "fetch: web row must restate fetchProvider = selected id")
+      (pkgs.lib.assertMsg ((rowOf "tool-web").config.fetch == true)
+        "fetch: tool-web row must restate fetch: true (base SSRF fuse, delegated provider)")
+      (pkgs.lib.assertMsg (bothDisabled == [ "web-fetch-other" ])
+        "fetch: unselected declared backend must get a disable row")
+      (pkgs.lib.assertMsg (builtins.length sel.perProfile.default.extraPlugins == 1)
+        "fetch: selecting zhipu must add the package source to every profile")
+      (pkgs.lib.assertMsg (st ? "web-fetch-zhipu" && st."web-fetch-zhipu".returnFormat == "text")
+        "fetch: selected backend attrs must render into settings.\"web-fetch-zhipu\"")
+    ]) "touch $out");
+
+  # fetch 真 boot:web-fetch-zhipu 进树 + fetchProvider 重述 + fetch: true
+  dsh-fetch-in-tree =
+    let
+      applied = dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          plugins = { };
+          profiles = { default = { }; };
+          inBoxPlugins = { };
+          webFetch = "zhipu";
+          webFetchProviders.zhipu = {
+            row = {
+              name = "@fww/dsh-web-fetch-zhipu";
+              config.apiKeyEnv = "ZHIPU_API_KEY";
+            };
+          };
+        };
+      };
+      inc = applied.perProfile.default;
+      bundle = dshLib.buildProfile {
+        inherit pkgs;
+        profile = dshLib.mkProfile {
+          name = "fetch-tree";
+          plugins = [ "@deepseek-ai/dsh-base" ] ++ inc.extraPlugins;
+          userPatchesFile = null;
+          userPatches = inc.extraPatches;
+        };
+      };
+    in
+    pkgs.runCommand "dsh-fetch-in-tree-check" { } ''
+      ${materialize "fetch-tree" bundle}
+      ${pkgs.dsh}/bin/dsh --profile fetch-tree --dump-config > "$TMPDIR/dump.log" 2>&1 \
+        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      grep -q 'web-fetch-zhipu' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "web-fetch-zhipu entry missing from composed tree" >&2; exit 1;
+      }
+      ! grep -q 'entry "web-fetch-zhipu" not found' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "web-fetch-zhipu row was warn-skipped (patch shape, not insert)" >&2; exit 1;
+      }
+      grep -q 'fetchProvider: zhipu' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "web row fetchProvider=zhipu restatement missing" >&2; exit 1;
+      }
+      touch $out
+    '';
+
 
   materialize = name: bundle: ''
     home="$TMPDIR/dsh-home"
@@ -546,6 +670,8 @@ in
   dsh-capability-clash = capabilityClash;
   dsh-exa-in-tree = dsh-exa-in-tree;
   dsh-zhipu-in-tree = dsh-zhipu-in-tree;
+  dsh-fetch-rows = fetchRows;
+  dsh-fetch-in-tree = dsh-fetch-in-tree;
   dsh-secret-env-bridge = secretEnvBridge;
   dsh-profile-structure = pkgs.runCommand "dsh-profile-structure-check"
     { nativeBuildInputs = [ pkgs.jq ]; } ''

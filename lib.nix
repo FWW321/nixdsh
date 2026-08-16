@@ -78,11 +78,21 @@ let
           }
         ] else [ ];
       provTable = if (cfg.providers or null) == null then { } else cfg.providers;
+      wfSel = cfg.webFetch or null;
+      wfDecl = if wfSel == null then null else (cfg.webFetchProviders or { }).${wfSel} or null;
+      wfRow =
+        if wfDecl != null && (wfDecl.row.secretFile or null) != null then [
+          {
+            env = (wfDecl.row.config or { }).apiKeyEnv or (secretEnvName wfDecl.row.secretFile);
+            file = wfDecl.row.secretFile;
+          }
+        ] else [ ];
       provs = filter
         (p: (p.secretFile or null) != null)
         (attrValues provTable);
       entries =
         wsRow
+        ++ wfRow
         ++ map
           (p: {
             env = if (p.apiKeyEnv or null) != null then p.apiKeyEnv else secretEnvName p.secretFile;
@@ -229,7 +239,8 @@ let
   # 条目;defaultModel 渲染进 agent-default-model 段(schema 实测于源码)
   renderSettings =
     { settings, telemetry, providers ? { }, defaultModel ? null
-    , webSearch ? null, webSearchProviders ? { }, llmDeepseek ? null }:
+    , webSearch ? null, webSearchProviders ? { }, llmDeepseek ? null
+    , webFetch ? null, webFetchProviders ? { } }:
     let
       # 省略 null/空的字段;settings 逃生口最后并(未 typed 字段直通)。
       # `or` 缺省:renderSettings 可脱离 module system 直接调用(checks/测试)
@@ -294,6 +305,23 @@ let
         in
         if wsSelected == null then { }
         else sectionIf wsSelectedNs decl;
+      # fetch 后端参数:镜像 wsSettings(选中段才渲染;段名 web-fetch-<id>
+      # 或 row.settingsNamespace 覆盖)
+      wfSelected = webFetch;
+      wfSelectedDecl =
+        if wfSelected == null then null
+        else (webFetchProviders.${wfSelected} or { });
+      wfSelectedNs =
+        if wfSelectedDecl ? row && wfSelectedDecl.row ? settingsNamespace then wfSelectedDecl.row.settingsNamespace
+        else "web-fetch-${wfSelected}";
+      wfSettings =
+        let
+          decl =
+            if wfSelectedDecl ? settings then wfSelectedDecl.settings
+            else { };
+        in
+        if wfSelected == null then { }
+        else sectionIf wfSelectedNs decl;
     in
     settings
     // (
@@ -318,6 +346,7 @@ let
       }
     )
     // wsSettings
+    // wfSettings
     // (sectionIf "llm-deepseek" llmDeepseek);
 
   # 上游 CLI 子命令集(自动):commander 在 bin.js 的注册模式
@@ -464,8 +493,8 @@ let
       # stub cfg(无该键)与真实 cfg(默认 null)等价;显式 attrs 时模块
       # 系统保证键存在,inherit (cfg) 反而会炸 stub 调用方
       settingsJSON =
-        if renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; webSearchProviders = cfg.webSearchProviders or { }; llmDeepseek = cfg.llmDeepseek or null; } == { } then null
-        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; webSearchProviders = cfg.webSearchProviders or { }; llmDeepseek = cfg.llmDeepseek or null; });
+        if renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; webSearchProviders = cfg.webSearchProviders or { }; llmDeepseek = cfg.llmDeepseek or null; webFetch = cfg.webFetch or null; webFetchProviders = cfg.webFetchProviders or { }; } == { } then null
+        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; webSearchProviders = cfg.webSearchProviders or { }; llmDeepseek = cfg.llmDeepseek or null; webFetch = cfg.webFetch or null; webFetchProviders = cfg.webFetchProviders or { }; });
       settingsPrelude = optionalString (settingsJSON != null) ''
         dsh_home="''${DSH_HOME:-$HOME/.dsh}"
 
@@ -732,6 +761,12 @@ let
                piAiOrphan = piAiNull && (cfg.settings or { }) ? "llm-pi-ai";
                dshOrphan = dshNull && (cfg.defaultModel or null) != null
                  && cfg.defaultModel.provider == "deepseek-official";
+                # fetch 缝(镜像 ws 组):无 base 自带集,选中必在声明表
+                wfNull = (cfg.webFetch or null) == null;
+                wfProviders = cfg.webFetchProviders or { };
+                wfUnknown = !wfNull && !builtins.elem cfg.webFetch (attrNames wfProviders);
+                wfOrphanProviders = wfNull && wfProviders != { };
+                wfClash = !wfNull && (inbox "tool-web").enable == false;
              in
              if (cfg.skills or { }) != { } && skillProvider.enable == false then
                throw "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider"
@@ -751,6 +786,12 @@ let
                throw "programs.dsh: providers = null but settings.\"llm-pi-ai\" is declared (or defaultModel routes through pi-ai) — a disabled adapter cannot consume them; set providers = {} or drop the declarations"
              else if dshOrphan then
                throw "programs.dsh: llmDeepseek = null but defaultModel.provider = \"deepseek-official\" — the default route points at a disabled adapter; enable llmDeepseek or re-route defaultModel"
+              else if wfClash then
+                throw "programs.dsh: webFetch is set but inBoxPlugins disables tool-web — the fetch tool row must stay enabled (webFetch renders its fetch: true restatement)"
+              else if wfUnknown then
+                throw "programs.dsh: webFetch = \"${cfg.webFetch}\" is not a declared webFetchProviders entry — the fetch seam has no base-shipped backend; declare the backend first"
+              else if wfOrphanProviders then
+                throw "programs.dsh: webFetchProviders is non-empty but webFetch = null (capability disabled) — declared backends would never run; set webFetch to a declared id or clear the table"
              else null;
           gen = lib.mapAttrs'
             (name: p:
@@ -953,6 +994,49 @@ let
         if cfgWs != null && cfgWs != "deepseek-official" then
           [ { id = "web"; config = { searchProvider = cfgWs; }; } ]
         else [ ];
+      # ── fetch 缝(镜像 ws 组;差异:无 base 自带后端 → 无裸 attrs 形态,
+      # 无骨架行(默认态 = base 现状 fetch: false,非禁行),选中必声明)
+      cfgWf = cfg.webFetch or null;
+      cfgWfProviders = cfg.webFetchProviders or { };
+      wfBackend = id: p:
+        let
+          rowIdOf = name:
+            let tail = lib.removePrefix "dsh-" (lib.last (lib.splitString "/" name)); in
+            if lib.hasPrefix "web-fetch-" tail then tail else "web-fetch-${tail}";
+          base = p.row.config or { };
+        in
+        {
+          rowId = p.row.id or (rowIdOf p.row.name);
+          rowName = p.row.name;
+          rowConfig =
+            if (p.row.secretFile or null) != null && !(base ? apiKeyEnv) then
+              base // { apiKeyEnv = secretEnvName p.row.secretFile; }
+            else base;
+          source = p.source or null;
+          namespace = p.row.settingsNamespace or "web-fetch-${id}";
+        };
+      wfBackends = mapAttrs wfBackend cfgWfProviders;
+      # 选中 → insert 行 + web 行重述 fetchProvider + tool-web 行重述
+      # fetch: true(base 的 SSRF 保险丝;委托型 provider 无此面,显式
+      # 打开 —— 打开动作本身即"我信任这个 provider 的 SSRF 姿态"声明)
+      wfProviderRows =
+        let sel = if cfgWf == null then null else wfBackends.${cfgWf} or null; in
+        lib.optionals (sel != null) [
+          { id = sel.rowId; name = sel.rowName; config = sel.rowConfig; }
+          { id = "web"; config = { fetchProvider = cfgWf; }; }
+          { id = "tool-web"; config = { fetch = true; }; }
+        ];
+      wfDisable =
+        # 声明未选中后端行(备案待命 → 禁行,死卡清理;同 ws 语义)
+        lib.filter (id: id != cfgWf) (attrNames cfgWfProviders);
+      wfDisableRows = map (id: { id = wfBackends.${id}.rowId; disabled = true; }) wfDisable;
+      wfProviderSources =
+        let sel = if cfgWf == null then null else wfBackends.${cfgWf} or null; in
+        lib.optionals (sel != null)
+          (if sel.source != null then [ sel.source ]
+           else [ (registryLookup sel.rowId) ]);
+      # fetch 缝行组(未选中禁行 + 选中 insert/选择器/保险丝)
+      wfRows = wfDisableRows ++ wfProviderRows;
     in
     {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜出)
@@ -960,7 +1044,7 @@ let
       # MCP 服务器行(同样全局,追加在 in-box 行之后)
       mcpPatches = mcpPatches;
       # 三态 typed 选项的行组(disable + 后端行 + 选择器行;追加在 in-box 行之后)
-      inherit capabilityPatches wsProviderRows wsSelectorRow;
+      inherit capabilityPatches wsProviderRows wsSelectorRow wfRows;
       # secret 占位符引用的文件路径清单(wrapper 注入块消费)
       inherit mcpSecretRefs;
       # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
@@ -973,7 +1057,8 @@ let
             extraPlugins =
               (map (c: c.plugin.source)
                 (filter (c: builtins.elem profileName c.profiles) contributions))
-              ++ (lib.filter (s: s != null) wsProviderSources);
+              ++ (lib.filter (s: s != null) wsProviderSources)
+              ++ (lib.filter (s: s != null) wfProviderSources);
             extraPatches =
               (concatMap (c: c.patches)
                 (filter (c: builtins.elem profileName c.profiles) contributions))
@@ -981,6 +1066,7 @@ let
               ++ capabilityPatches
               ++ wsProviderRows
               ++ wsSelectorRow
+              ++ wfRows
               ++ mcpPatches;
           })
           allProfileNames);
