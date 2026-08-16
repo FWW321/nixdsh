@@ -749,7 +749,7 @@ let
       profileBundles = mapAttrs
         (name: p: buildProfile {
           inherit pkgs;
-          profile = mkProfile { inherit name; } // (withPlugins name p);
+          profile = mkProfile ({ inherit name; } // (withPlugins name p));
         })
         allProfiles;
     in
