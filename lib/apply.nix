@@ -230,16 +230,17 @@ let
       globalDefaultPreset = cfg.defaultPreset or null;
       _defaultPresetAssert =
         let
+          enabledPlugins = lib.filterAttrs (_: p: p.enable) (cfg.plugins or { });
           noTree = filter
             (name:
               (cfg.plugins.${name}.defaultPreset or null) != null
               && faceOf name cfg.plugins.${name} == null)
-            (attrNames (lib.filterAttrs (_: p: p.enable) cfg.plugins));
+            (attrNames enabledPlugins);
           freeformClash =
             (cfg.settings or { }) ? "agent-presets"
             && ((cfg.defaultPreset or null) != null
               || any (name: (cfg.plugins.${name}.defaultPreset or null) != null)
-                (attrNames (lib.filterAttrs (_: p: p.enable) cfg.plugins)));
+                (attrNames enabledPlugins));
         in
         if noTree != [ ] then
           throw "programs.dsh.plugins.${builtins.head noTree}: defaultPreset set on a non-face plugin (no interactive tree to render into — face trees come exclusively from face plugins; global defaultPreset covers the rest)"
@@ -256,7 +257,7 @@ let
             (name: p:
               let v = p.defaultPreset or null; in
               if p.enable && v != null then [{ tree = faceNameOf name p; value = v; }] else [ ])
-            cfg.plugins);
+            (cfg.plugins or { }));
         in
         listToAttrs (map (e: nameValuePair e.tree e.value) fromPlugins);
       hasFaceDefaultPreset = faceDefaultPresetRows != { };
@@ -556,8 +557,8 @@ let
         # 与 excludedPresets 非空同设 → 矛盾声明 throw
         builtins.foldl'
           (acc: name:
-            let p = cfg.plugins.${name}; in
-            if !p.enable then acc
+            let p = (cfg.plugins or { }).${name} or null; in
+            if p == null || !p.enable then acc
             else if !(p.presets or true) then
               (if (p.excludedPresets or [ ]) != [ ] then
                 throw "programs.dsh.plugins.${name}: presets = false (take over none) conflicts with a non-empty excludedPresets — pick one"
