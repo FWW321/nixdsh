@@ -344,7 +344,7 @@ in
             '';
           };
         };
-      });
+      }));
       default = { };
       example = lib.literalExpression ''
         {
