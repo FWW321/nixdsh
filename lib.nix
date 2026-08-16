@@ -311,17 +311,20 @@ let
   # skill 源校验(dsh-skill-filesystem 实测):单文件 .md 或目录束(目录
   # 须含 SKILL.md)。返回 { name → target 相对路径 }(文件 → <名>.md,
   # 目录 → <名>/),供 activation 物化;非法源 throw。
-  # 判定用 pathExists 而非 builtins.pathType(后者在部分 Nix 版本缺失,
-  # 实测 nh 构建期 eval 报 attribute missing)
+  # readFileType(非 pathType —— 后者是 lib.filesystem 函数,builtin
+  # 只有 readFileType,记错名曾在全版本炸):能区分 directory/regular,
+  # 文件与目录语义不同,显式判型比存在性探测更贴切
   validateSkills = skills:
     mapAttrs
       (name: s:
         let
           src = toString s.source;
-          isBundle = builtins.pathExists "${src}/SKILL.md";
+          type = builtins.readFileType src;
         in
-        if isBundle then "${name}"
-        else if lib.hasSuffix ".md" src then "${name}.md"
+        if type == "directory" then
+          if builtins.pathExists "${src}/SKILL.md" then "${name}"
+          else throw "programs.dsh.skills.${name}.source: directory ${src} has no SKILL.md (a directory skill bundles <name>/SKILL.md + optional resources)"
+        else if type == "regular" && lib.hasSuffix ".md" src then "${name}.md"
         else throw "programs.dsh.skills.${name}.source: ${src} must be a .md skill or a directory containing SKILL.md")
       skills;
 
