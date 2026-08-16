@@ -411,7 +411,10 @@ in
         agent 预设声明:activation 物化到
         \$DSH_HOME/.agent-presets/\<name\>(stamp 同 profile 模式),
         免重启生效。与 shipped 预设同名会被上游 root 优先级遮蔽
-        ——改名,勿与官方预设撞 id。
+        ——改名,勿与官方预设撞 id。roster 行(agent-presets)由
+        tui/web 树自带,headless 树无此行(上游 per-face 语义);
+        显式 inBoxPlugins.agent-presets.enable = false 与本选项
+        冲突,求值期报错。
       '';
     };
 
@@ -576,9 +579,12 @@ in
         }
       '';
       description = ''
-        MCP 服务器声明:每条渲染一行 cordis 插件行到所有 profile
-        (id = mcp-\<name\>,serverName = attr 名)。schema 实测于
-        dsh-mcp-client(判别联合:stdio / streamable-http)。
+        MCP 服务器声明:每条渲染一个 insert 条目到所有 profile
+        (id = mcp-\<name\>,serverName = attr 名)。插件
+        @deepseek-ai/dsh-mcp-client 随行插入,不在默认树也无须
+        inBoxPlugins 启用 —— 要卸载就删条目本身(经 inBoxPlugins
+        disable 无效:id 不在树上)。schema 实测于 dsh-mcp-client
+        (判别联合:stdio / streamable-http)。
       '';
     };
 
@@ -609,6 +615,9 @@ in
       description = ''
         skill 声明:activation 物化到 \$DSH_HOME/skills/\<名\>[.md]
         (stamp 语义同 presets),上游 watch 热发现免重启。
+        依赖:发现插件 skill-filesystem 在 base 树默认启用;显式
+        inBoxPlugins.skill-filesystem.enable = false 与本选项冲突,
+        求值期报错(物化文件将无人发现,静默失效更糟)。
       '';
     };
 
