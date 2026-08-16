@@ -324,16 +324,32 @@ unit 变 → HM 自动重启服务;实测 peers 修复重建后一次拉起,无�
 **已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
 rc.6)。`webSearch = null` 禁三行(`web`/`web-search-deepseek`/`tool-web`
 —— 三个独立行,"不要搜索能力"同时覆盖 provider 与工具,工具禁用不
-依赖 provider)。web face 上 tool-web 存在两份:宿主树行已被 web-app
-的 bundle patch 禁掉(我们的 disable 行打上是 no-op,无冲突);shipped
-preset(standard/code/cordis)的 `agent.cordis.yml` 各自带一份
-`tool-web`(minimal 无)—— preset 是 CLI 包内只读独立组合,profile
-patch 只作用宿主树,自建同名 preset 又被 shipped root first-root-wins
-遮蔽,覆盖路线也堵死。后果:**"禁工具"意图在 web face 部分丢失** ——
-preset 里的 tool-web 漏网照常注册,`web_search` 工具卡留在 UI、schema
-token 照吃(provider 行已禁,调用报 `WEB_PROVIDER_CONFIGURED_MISSING`
-结构化错误 —— 这本身是上游"稳定注册"的正常设计,问题只在禁用意图
-没打全)。tui/headless 的 tool-web 是宿主树行,disable 全净。根治需
+依赖 provider)。
+
+**base 行 tool-web 的三 face 三态**(逐 profile dump 实测 rc.6;这行
+不是死行,是 headless 的活水 —— base 默认完整集、face patch 做减法):
+
+| face | base tool-web | 谁禁的 | 搜索工具来源 |
+|---|---|---|---|
+| headless | **启用** | 无人禁 | base 行本身(裸会话无 preset 层) |
+| web | 禁用 | dsh-web-app bundle patch | shipped preset 各自挂(standard/code/cordis 有,minimal 无) |
+| tui | 禁用 | dsh-tui cordis.patch.yml:120(连批工具精简) | preset(liangshen 的 agent.cordis.yml:385 实证) |
+
+web face 上 tool-web 存在两份的架构语义(源码注释 dsh-web-app
+:383-384 原话:"The `web` service and its search provider stay in the
+host composition; only the model-facing tool is per-session"):
+web 服务 + provider 住宿主组合(有状态:provider 注册表/MCP 会话缓存/
+凭证单点,轮换一次生效),模型面工具按 preset 实例化(无状态,但吃
+每次请求的 prompt 预算,preset 裁剪自由度 + per-session 政策隔离)
+—— 服务/消费者分离,工具调宿主 web 服务,服务再走选中 provider。
+
+后果:**"禁工具"意图在 web face 部分丢失** —— preset 是 CLI 包内只读
+独立组合,profile patch 只作用宿主树,自建同名 preset 又被 shipped
+root first-root-wins 遮蔽,覆盖路线也堵死;preset 里的 tool-web 漏网
+照常注册,`web_search` 工具卡留在 UI、schema token 照吃(provider 行
+已禁,调用报 `WEB_PROVIDER_CONFIGURED_MISSING` 结构化错误 —— 这本身
+是上游"稳定注册"的正常设计,问题只在禁用意图没打全)。tui 同理
+(preset 接管)。headless 的 disable 全净(宿主行即唯一行)。根治需
 上游:preset 级配置化裁剪或 agent-presets 行级禁用(随 preset opt-out
 issue 一并提)。
 
