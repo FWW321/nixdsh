@@ -130,6 +130,21 @@ nixdsh/
 原生子命令)。不再生成 per-profile wrapper(`dsh-<face>` 等)—— 子命令
 分发等价,独立入口只是 $PATH 噪音,短命令需求由 shell alias 承担。
 
+## 服务与 CLI:无共享守护进程(实测 rc.5 依赖图)
+
+**每个 face boot 一棵完整独立的 cordis 树**,不是"后端守护 + 瘦前端"。
+TUI 插件的依赖表直接内嵌运行时(`dsh-agent`/`dsh-session`/`dsh-storage`/
+`dsh-cordis-host-runner`,无任何 RPC 客户端);`dsh-client-connection` 的
+WebSocket server 是 web 应用**进程内**给浏览器用的传输层,不跨前端。
+
+因此 `programs.dsh.web.enable` 的 systemd 服务 = 常驻的 web face 进程
+(占 127.0.0.1:3080),**不是**可被 tui/headless 复用的会话后端 ——
+上游没有跨 face 客户端协议,TUI 无法"连接"web 服务。
+
+共享层是**文件系统**(`$DSH_HOME`):settings.yaml 热重载(所有运行中
+进程可见,这也是 yq-merge 方案成立的前提)、凭证服务、会话存储。
+web 服务与 `dsh tui` 并行运行是预期用法:两进程、两棵树、一份盘上状态。
+
 ## 装插件
 
 **方式 A:进 registry(常用插件,nixvim 式零样板)**
