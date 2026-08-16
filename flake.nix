@@ -67,5 +67,9 @@
       # nixvim 式独立实例化 API(与 mkDsh 同构;checks/外部消费者用)
       lib.mkDsh = { pkgs ? import nixpkgs { system = "x86_64-linux"; overlays = [ self.overlays.default ]; }, modules ? [ ], extraSpecialArgs ? { } }:
         (import ./lib { inherit (nixpkgs) lib; }).mkDsh { inherit pkgs modules extraSpecialArgs; };
+
+      # config 侧小助手(消布局硬编码):shipped preset 路径解析
+      lib.shippedPreset = { pkgs ? import nixpkgs { system = "x86_64-linux"; overlays = [ self.overlays.default ]; }, name }:
+        (import ./lib { inherit (nixpkgs) lib; }).shippedPreset pkgs name;
     };
 }

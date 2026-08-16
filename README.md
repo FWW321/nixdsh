@@ -515,6 +515,11 @@ staged 替换 —— 所有权归声明方)。
 
 - **零边际**:行组来自能力选项(webFetch/webSearch/将来任意),
   自动穿透所有声明的 preset;配置面无任何 per-preset 改写行
+- **preset 自动发现**:enabled 插件源携带的 preset 自动接管(registry
+  derivation 走 `passthru.dshPresets`(update.py 收录时探测 `presets/*/
+  agent.cordis.yml`),flake path 源直扫目录)—— `plugins.dsh-tui.enable`
+  是唯一事实,preset 跟随插件生命周期(disable → 孤儿清理移除);用户
+  显式 `presets.<name>` 声明与发现撞名 → 显式胜
 - **删除自动清理**:行增/删/改 → 产物 store 路径变 → stamp 不匹配
   → 重物化;删整个声明 → 既有孤儿清理兜底
 - **行不在 preset 里 → 无操作**(minimal 无 tool-web 行是身份语义,
@@ -522,15 +527,18 @@ staged 替换 —— 所有权归声明方)。
 - **上游跟随**:flake bump → source 包变 → 重物化重放,与 profile
   的 base+userPatches 完全同构
 
-用法(fork shipped preset 须换名避开遮蔽 + 设默认;tui 托管 preset
-声明同名即接管):
+用法(插件托管 preset 零声明;shipped fork 用助手消布局硬编码):
 
 ```nix
-presets.fww.source = "${pkgs.dsh}/config/agent-presets/standard"; # 换名
+# liangshen 零声明:dsh-tui enabled → preset 自动发现接管
+presets.fww.source = lib.mkDefault (nixdsh.lib.shippedPreset pkgs "standard"); # 换名
 settings."agent-presets".default = "fww";
-presets.liangshen.source = "${pkgs.dshPlugins.dsh-tui}/presets/liangshen";
-webFetch = "zhipu";   # 自动重放 fetch:true 进两个 preset
+webFetch = "zhipu";   # 自动重放 fetch:true 进所有 preset(发现 + 声明)
 ```
+
+(settings 对 preset 名册只有 `{default}` 一键 —— dsh-agent-presets
+:796 `AgentPresetSettingsSchema = z.object({ default: z.string() })`,
+能力配置不可能经 settings 穿透 preset 面,已实证,重放层不可省。)
 
 残余边界(架构性质,非方案缺陷):会话内手动选非 default 的 shipped
 preset(standard/cordis)拿到未改写版 —— "a preset IS a

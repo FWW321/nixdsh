@@ -172,4 +172,64 @@ in
       (assert' (!skillClash.success) "dsh-skills: skills + skill-filesystem disabled must throw at eval time")
       (assert' (!presetClash.success) "dsh-skills: presets + agent-presets disabled must throw at eval time")
     ]) "touch $out");
+
+  # preset 自动发现:derivation 源(passthru.dshPresets)+ path 源(直扫
+  # presets/)+ 显式声明胜 + shipped preset 助手(布局漂移 fail-loud)
+  dsh-preset-discover =
+    let
+      # path 源夹具:真 Nix path(flake=false input 形态),含
+      # presets/<id>/agent.cordis.yml 目录束 + 一个无组合文件的干扰目录
+      pathSrc = ../fixtures/preset-path-src;
+      # derivation 源夹具:passthru.dshPresets(仿 update.py 物化)
+      derivSrc = pkgs.runCommand "preset-deriv-src"
+        {
+          passthru.dshPresets = [ "shipped-one" ];
+        } ''
+        mkdir -p $out/presets/shipped-one
+        echo "- id: tool-web" > $out/presets/shipped-one/agent.cordis.yml
+      '';
+      noPresetSrc = pkgs.hello;
+      base = {
+        plugins = { };
+        profiles = { default = { }; };
+        inBoxPlugins = { };
+      };
+      found = dshLib.discoverPresets {
+        inherit pkgs;
+        cfg = base // {
+          plugins = {
+            a = { enable = true; source = pathSrc; };
+            b = { enable = false; source = derivSrc; };  # disabled → 不发现
+            c = { enable = true; source = noPresetSrc; }; # 无 preset → 空贡献
+          };
+        };
+      };
+      # passthru 源单独验(上面 b disabled)
+      foundDeriv = dshLib.discoverPresets {
+        inherit pkgs;
+        cfg = base // { plugins.b = { enable = true; source = derivSrc; }; };
+      };
+      # 显式声明胜:同名 found 源被显式 presets 覆盖(hm-module 合流序)
+      merged = dshLib.discoverPresets {
+        inherit pkgs;
+        cfg = base // {
+          plugins.a = { enable = true; source = pathSrc; };
+        };
+      } // { handmade = "/explicit/wins"; };
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-preset-discover-check" { } (builtins.deepSeq ([
+      (assert' (found ? handmade && found ? second-one)
+        "preset-discover: path source with presets/<id>/agent.cordis.yml must be discovered (composition-less dirs skipped)")
+      (assert' (!found ? shipped-one)
+        "preset-discover: disabled plugin's presets must not be discovered")
+      (assert' (foundDeriv ? shipped-one)
+        "preset-discover: derivation source passthru.dshPresets must be discovered")
+      (assert' (merged.handmade == "/explicit/wins")
+        "preset-discover: explicit preset declaration must win over discovered")
+      (assert' (lib.match ".*/config/agent-presets/standard" (dshLib.shippedPreset pkgs "standard") != null)
+        "preset-discover: shippedPreset helper must resolve the standard preset path")
+      (assert' (!(builtins.tryEval (builtins.deepSeq (dshLib.shippedPreset pkgs "no-such-preset") null)).success)
+        "preset-discover: shippedPreset must throw on unknown preset (upstream layout drift fail-loud)")
+    ]) "touch $out");
 }

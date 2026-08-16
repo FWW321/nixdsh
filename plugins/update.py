@@ -191,6 +191,18 @@ def main() -> None:
         )
         if peers:
             fields.append(("peers", json.dumps(peers)))
+        # preset 探测:presets/<id>/agent.cordis.yml 的插件托管预设
+        # (dsh-tui 的 liangshen 形态 —— ensurePackagedPresets 播种源)。
+        # 物化 dshPresets → eval 期零构建发现;无 presets/ 目录 = 不写
+        # (字段缺省,overlay 不物化)
+        preset_ids = sorted(
+            p.name
+            for p in pkg_dir.glob("presets/*")
+            if (p / "agent.cordis.yml").is_file()
+        )
+        if preset_ids:
+            print(f"  presets: {', '.join(preset_ids)}")
+            fields.append(("dshPresets", json.dumps(preset_ids)))
         if needs_build:
             fields += [("needsBuild", True), ("pnpmHash", pnpm_hash)]
 

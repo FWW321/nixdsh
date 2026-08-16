@@ -104,6 +104,7 @@ let
         packageName = name;
         dshBundlePatch = e.bundlePatch or null;
         dshFace = e.face or null;
+        dshPresets = e.dshPresets or [ ];
       };
 
       meta = with lib; {
@@ -120,6 +121,7 @@ let
           packageName = name;
           dshBundlePatch = e.bundlePatch or null;
           dshFace = e.face or null;
+          dshPresets = e.dshPresets or [ ];
         };
         meta = with lib; {
           description = "dsh plugin source: ${e.owner}/${e.repo}@${e.version}";

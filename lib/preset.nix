@@ -27,10 +27,51 @@ let
     escapeShellArg
     filter
     length
+    listToAttrs
     optionalString
     ;
 in
 {
+  # ── preset 自动发现(插件托管 preset,liangshen 形态)─────────────────
+  # enabled 插件的源携带 presets:passthru.dshPresets(registry derivation,
+  # update.py 收录时探测物化)/ 直扫 presets/ 目录(path 源,flake=false
+  # input)。发现即接管 —— 物化剥 tui marker 后 ensurePackagedPresets 视
+  # 为 conflict 永不碰,插件 disable → 孤儿清理自动移除。用户显式
+  # presets.<name> 声明与发现撞名 → 显式胜(声明即接管先例)。
+  discoverPresets =
+    { cfg, pkgs }:
+    let
+      enabledSources = map (p: p.source)
+        (filter (p: p.enable && p.source != null) (builtins.attrValues cfg.plugins));
+      # path 源直扫(presets/<id>/agent.cordis.yml)
+      scanPath = src:
+        if !builtins.isPath src then { }
+        else if builtins.pathExists "${toString src}/presets" then
+          listToAttrs (map
+            (id: { name = id; value = "${toString src}/presets/${id}"; })
+            (filter
+              (id: builtins.pathExists "${toString src}/presets/${id}/agent.cordis.yml"
+                && builtins.readFileType "${toString src}/presets/${id}" == "directory")
+              (builtins.attrNames (builtins.readDir "${toString src}/presets"))))
+        else { };
+      # derivation 源读 passthru(update.py 物化,eval 期零构建)
+      readDeriv = src:
+        if lib.isDerivation src && (src.passthru or { }) ? dshPresets
+        then listToAttrs (map
+          (id: { name = id; value = "${toString src}/presets/${id}"; })
+          src.passthru.dshPresets)
+        else { };
+    in
+    builtins.foldl' (acc: src: acc // (scanPath src) // (readDeriv src)) { }
+      enabledSources;
+
+  # ── shipped preset 助手(消 config 侧布局硬编码)────────────────────
+  # pnpm deploy 布局知识收在 nixdsh 一处;上游布局变化由
+  # dsh-shipped-preset check 拦(fail-loud 而非 config 侧静默断路径)
+  shippedPreset = pkgs: name:
+    let root = "${pkgs.dsh}/lib/node_modules/@deepseek-ai/dsh/config/agent-presets"; in
+    if builtins.pathExists "${root}/${name}/agent.cordis.yml" then "${root}/${name}"
+    else throw "nixdsh: shipped preset '${name}' not found under ${root} (upstream layout change? update shippedPreset in lib/preset.nix)";
   # source: preset 目录(path/store 路径,须含 agent.cordis.yml —— 上游
   #   validatePresets 已拦)
   # rows: cordis patch 行组([{id, config = {...}}];disabled/insert 形态
