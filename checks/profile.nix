@@ -1,0 +1,185 @@
+# profile 模型域:bundle 工件形状/正例 boot/缺 base 负例/face 四态/
+# inBoxPlugins 三态行
+{ pkgs, dshLib, fx }:
+
+let
+  inherit (fx) applyWith mkFakeCfg;
+in
+{
+  dsh-profile-structure = pkgs.runCommand "dsh-profile-structure-check"
+    { nativeBuildInputs = [ pkgs.jq ]; } ''
+      bundle=${fx.goodProfile}
+      expected='["@deepseek-ai/dsh-base","@deepseek-ai/dsh-web-app"]'
+      actual=$(jq -c '.dsh.profile.bundles' "$bundle/package.json")
+      test "$actual" = "$expected" || {
+        echo "bundles mismatch: $actual != $expected" >&2; exit 1;
+      }
+      test -f "$bundle/cordis.yml" || { echo "missing cordis.yml" >&2; exit 1; }
+      test -f "$bundle/cordis.patch.yml" || { echo "missing cordis.patch.yml" >&2; exit 1; }
+      touch "$out"
+    '';
+
+  # 实测依据(rc.5):--dump-config 对坏组合只打印 "entry not found" 但 exit 0,
+  # 真正的 fail-loud(assertEntriesActivated: pending waiting for service)只在
+  # 实际 boot 时触发 → 负例用无参 boot 断言非零退出
+  dsh-profile-headless = pkgs.runCommand "dsh-profile-headless-check" { } ''
+      ${fx.materialize "headless" fx.headlessProfile}
+      ${pkgs.dsh}/bin/dsh --profile headless --dump-config > "$TMPDIR/dump.log" 2>&1 \
+        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      # dsh-base 的条目必须在组合树里(证明层序叠加生效,而非空树碰巧 exit 0)
+      grep -q "cordis-plugin-timer" "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "base layer entries missing from composed tree" >&2; exit 1;
+      }
+      touch "$out"
+    '';
+
+  dsh-profile-nobase = pkgs.runCommand "dsh-profile-nobase-check" { } ''
+      ${fx.materialize "web-nobase" fx.nobaseProfile}
+      if ${pkgs.dsh}/bin/dsh --profile web-nobase > "$TMPDIR/boot.log" 2>&1; then
+        echo "profile without base unexpectedly booted" >&2
+        exit 1
+      fi
+      grep -q "assertEntriesActivated" "$TMPDIR/boot.log" || {
+        cat "$TMPDIR/boot.log" >&2
+        echo "expected assertEntriesActivated fail-loud, different failure mode" >&2
+        exit 1
+      }
+      touch "$out"
+    '';
+
+  # face 四态语义:true=键名派生(module system 键唯一)/false=压制推导/
+  # null=in-box 表推导;face 插件不参与分发,功能插件分发到含自动 face
+  dsh-face-gen =
+    let
+      r = applyWith {
+        profiles = { };
+        plugins = {
+          "web-app" = {
+            enable = true;
+            face = null; # ← in-box 表推导出 "web"
+            source = "@deepseek-ai/dsh-web-app";
+            profiles = [ ];
+            settings = { };
+            patches = [ ];
+            patchId = null;
+          };
+          "my-desktop" = {
+            enable = true;
+            face = true; # ← 键名派生
+            source = "@deepseek-ai/dsh-headless";
+            profiles = [ ];
+            settings = { };
+            patches = [ ];
+            patchId = null;
+          };
+          "rotator" = {
+            enable = true;
+            face = false; # ← 压制(若元数据标记过 face,当功能插件用)
+            source = "./fixture-rotator";
+            profiles = [ ];
+            settings = { };
+            patches = [ ];
+            patchId = null;
+          };
+          # 零 source + 零 face:registry 尾名反查(键名 dsh-tui →
+          # @deepseek-harness-tui/dsh-tui)+ passthru.dshFace → face "tui"
+          "dsh-tui" = {
+            enable = true;
+            face = null;
+            source = null;
+            profiles = [ ];
+            settings = { };
+            patches = [ ];
+            patchId = null;
+          };
+          # face=true + dsh- 前缀键名:剥前缀派生(免 dsh dsh-desktop 冗余)
+          "dsh-desktop" = {
+            enable = true;
+            face = true;
+            source = "@deepseek-ai/dsh-headless";
+            profiles = [ ];
+            settings = { };
+            patches = [ ];
+            patchId = null;
+          };
+        };
+      };
+      assert' = cond: msg: pkgs.lib.assertMsg cond msg;
+      # dsh <profile> 子命令分发:主 wrapper 脚本内容(build 期 grep);
+      # web 排除(上游原生 web 子命令已等价 boot profiles.web)
+      dispatchWrapper = dshLib.renderWrapper {
+        cfg = mkFakeCfg { };
+        inherit pkgs;
+        subcommands = [ "tui" "web" ];
+      };
+      plainWrapper = dshLib.renderWrapper {
+        cfg = mkFakeCfg { };
+        inherit pkgs;
+      };
+      # bash 补全:分发名单 + 上游命令都在 $1 词表,--profile 值含 web
+      completionText = dshLib.renderCompletion {
+        subcommands = [ "tui" "headless" ];
+        profiles = [ "web" "tui" "headless" ];
+        upstream = [ "web" "plugin" ];
+      };
+      # 保留名负例:profile/face 名撞上游子命令(plugin 语义 ≠ profile
+      # boot)→ renderWrapper 求值期 throw。tryEval 须强制求值到脚本
+      # 内容(writeShellScriptBin derivation)
+      badCmd = builtins.tryEval
+        (builtins.deepSeq
+          (dshLib.renderWrapper {
+            cfg = mkFakeCfg { };
+            inherit pkgs;
+            subcommands = [ "plugin" ];
+          })
+          null);
+      assertions = toString [
+        (assert' (r.facePlugins ? web) "dsh-face-gen: in-box table must derive 'web' from null face")
+        (assert' (r.facePlugins ? my-desktop) "dsh-face-gen: face=true must derive attr key name")
+        (assert' (!r.facePlugins ? rotator) "dsh-face-gen: face=false must suppress to function plugin")
+        (assert' (r.facePlugins ? tui) "dsh-face-gen: zero-source registry lookup must derive face 'tui' from passthru.dshFace")
+        (assert' (r.facePlugins ? desktop) "dsh-face-gen: face=true must strip dsh- prefix from attr key")
+        (assert' (!r.facePlugins ? "dsh-desktop") "dsh-face-gen: stripped face must replace the prefixed key name")
+        (assert' (r.perProfile ? web && r.perProfile ? my-desktop)
+          "dsh-face-gen: perProfile must cover auto faces")
+        (assert' (builtins.length r.perProfile.web.extraPlugins == 1)
+          "dsh-face-gen: suppressed (false) plugin must distribute as function plugin")
+        (assert' (!badCmd.success) "dsh-face-gen: name clashing upstream subcommand must be rejected at eval time")
+      ];
+    in
+    # seq 强制断言求值(任一失败 → 求值期 fail-loud);buildCommand grep
+    # 验证分发块渲染:tui 在/web 排除/空 faces 无块
+    pkgs.runCommand "dsh-face-gen-check" { } (builtins.seq assertions ''
+      grep -q 'tui)' ${dispatchWrapper}/bin/dsh
+      grep -qF -- '--profile "$_dsh_face"' ${dispatchWrapper}/bin/dsh
+      ! grep -qF 'tui|web' ${dispatchWrapper}/bin/dsh
+      ! grep -q '_dsh_face' ${plainWrapper}/bin/dsh
+      # 补全词表:子命令含 tui/headless/plugin,profile 词含 web
+      echo ${pkgs.lib.escapeShellArg completionText} > "$TMPDIR/dsh-completion"
+      grep -qF 'compgen -W "tui headless web plugin"' "$TMPDIR/dsh-completion"
+      grep -qF 'compgen -W "web tui headless plugin"' "$TMPDIR/dsh-completion"
+      grep -qF 'complete -F _dsh dsh' "$TMPDIR/dsh-completion"
+      touch $out
+    '');
+
+  # inBoxPlugins 双向渲染:disable/enable/config 三态行落进 bundle patch
+  dsh-inbox-rows =
+    let
+      rows = (applyWith {
+        inBoxPlugins = {
+          "llm-deepseek".enable = false;
+          hmr.enable = true;
+          "web-search-deepseek".enable = null; # 不表态 → 无行
+          timer.config.timeoutMs = 30000;
+        };
+      }).inBoxPatches;
+      asSet = builtins.listToAttrs (map (r: { name = r.id; value = r; }) rows);
+      has = id: builtins.elem id (builtins.attrNames asSet);
+    in
+    pkgs.runCommand "dsh-inbox-rows-check" { } (builtins.seq ([
+      (pkgs.lib.assertMsg (!has "web-search-deepseek") "inBoxPlugins: null enable must emit no row")
+      (pkgs.lib.assertMsg (asSet."llm-deepseek".disabled == true) "inBoxPlugins: enable=false must set disabled=true")
+      (pkgs.lib.assertMsg (asSet.hmr.disabled == false) "inBoxPlugins: enable=true must set disabled=false")
+       (pkgs.lib.assertMsg (asSet.timer.config.timeoutMs == 30000) "inBoxPlugins: config must render")
+     ]) "touch $out");
+}

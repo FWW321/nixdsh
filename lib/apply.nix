@@ -1,0 +1,470 @@
+# typed 插件层 → 各 profile 的增量渲染(nixvim 式):
+#   plugins.<name>.enable → 源(source 或 pkgs.dshPlugins.<name>)追加进目标
+#   profile 的 plugins;settings/patches 渲染为 patch 行追加进其 userPatches
+# 目标:plugin.profiles 非空取其与已声明 profile 的交集;空 = 所有 profile
+# patchId 语义:settings 非空时才要求;行 = { id; config = settings; }
+#
+# 同时承载:face 推导与自动 profile、_usageAssert(typed×inBox 冲突拦截)、
+# in-box 行、MCP insert 行、webSearch/webFetch 缝行组(disable/insert/选择器)
+{ lib, inBoxFaces, renderSecretAttrs, secretEnvName }:
+
+let
+  inherit (lib)
+    any
+    attrNames
+    attrValues
+    concatMap
+    concatStringsSep
+    filter
+    listToAttrs
+    mapAttrs
+    mapAttrsToList
+    nameValuePair
+    optionalAttrs
+    ;
+
+  applyPlugins =
+    { cfg, pkgs }:
+    let
+      enabled = filter (p: p.enable) (attrValues cfg.plugins);
+      # registry 尾名反查:键名 "dsh-tui" → "@deepseek-harness-tui/dsh-tui"
+      # (nixvim 式零 source)。attr 名 <scope>/<pkg>,pkg == <键名> 或
+      # "dsh-<键名>" 双形态;唯一匹配取之,空 = null(调用方决定报错语义),
+      # 多匹配 throw 列候选(须显式 source)
+      registryLookup = name:
+        let
+          table = pkgs.dshPlugins or { };
+          tailOf = k: lib.last (lib.splitString "/" k);
+          candidates = lib.filterAttrs
+            (k: _: tailOf k == name || tailOf k == "dsh-${name}")
+            table;
+          ns = attrNames candidates;
+        in
+        if ns == [ ] then null
+        else if builtins.length ns == 1 then table.${builtins.head ns}
+        else throw "programs.dsh.plugins.${name}: registry tail-name lookup is ambiguous (${concatStringsSep ", " ns}); set source explicitly";
+      # 名字→源:缺省 registry(不在 registry 且未显式给 source 时,mkPlugin
+      # 端 passthru 缺 packageName 会 throw —— 提前给友好错误)。
+      # face 插件跳过分发:源取 p.source / in-box 键名映射(headless →
+      # @deepseek-ai/dsh-headless)/ registry 尾名反查
+      faceSourceOf = name: p:
+        if p.source != null then p.source
+        else if inBoxFaces ? "@deepseek-ai/dsh-${name}" then "@deepseek-ai/dsh-${name}"
+        else if registryLookup name != null then registryLookup name
+        else throw "programs.dsh.plugins.${name}: face plugin requires a source (registry entry, in-box bundle, or explicit source)";
+      sourceOf = name: p:
+        if p.source != null then p.source
+        else if pkgs ? dshPlugins && pkgs.dshPlugins ? ${name} then pkgs.dshPlugins.${name}
+        else if registryLookup name != null then registryLookup name
+        else throw "programs.dsh.plugins.${name}: no source given and '${name}' not in pkgs.dshPlugins (add it to plugins/names.txt and run the updater, or set source)";
+      # 交互面插件 → 自动 profile(base + 本源)。face 插件互斥不参与分发
+      # (进其他树 = duplicate entry / TTY 致死,均实测),功能插件分发到
+      # 所有 face(profiles = [] 缺省语义含自动生成的 face)。
+      # face 推导(源解析感知):显式 plugins.<name>.face > source 的
+      # passthru.dshFace(registry 收录时人审)/ inBoxFaces(in-box 表) >
+      # 零 source 时先解析源(registry 反查 derivation 同样带 dshFace)再读。
+      # 无法纯自动判定互斥(id 冲突之外还有 TTY 等运行期约束,eval 期
+      # 不可见),故判定下沉为插件元数据 —— 用户侧只需 enable。
+      # face 名约束 kebab-case:它被拼进文件路径($DSH_HOME/profiles/<face>)
+      # 与子命令名(dsh <face>),同上游 settingsNamespace 的模式
+      validFace = f:
+        builtins.match "[a-z][a-z0-9]*(-[a-z0-9]+)*" f != null;
+      dshFaceOf = s:
+        if lib.isDerivation s then (s.passthru or { }).dshFace or null
+        else if builtins.isString s && inBoxFaces ? ${s} then inBoxFaces.${s}
+        else null;
+      deriveFace = name: p:
+        if p.face != null then p.face
+        else if p.source != null then dshFaceOf p.source
+        else
+          # 零 source:in-box 键名反查 > registry 反查(两者都返回源,读元数据)
+          if inBoxFaces ? "@deepseek-ai/dsh-${name}" then inBoxFaces."@deepseek-ai/dsh-${name}"
+          else if registryLookup name != null then dshFaceOf (registryLookup name)
+          else null;
+      # 最终 face 名:null = 非交互面;false = 显式压制(registry 标记的
+      # face 当功能插件用)→ 也归 null;true = 从 attr 键派生(剥一次
+      # "dsh-" 前缀,免 `dsh dsh-tui` 冗余子命令 —— cargo cargo-xx 惯例;
+      # 字符串 face 与 registry 元数据不动:前者尊重显式,后者收录时
+      # 已是人审终名);字符串 = 具体名。faceOf 之后只剩 null|true|str
+      faceOf = name: p:
+        let f = deriveFace name p; in
+        if f == false then null else f;
+      facePlugins =
+        let
+          enabled = lib.filterAttrs (name: p: p.enable && faceOf name p != null) cfg.plugins;
+          faceName = name: p:
+            let f = faceOf name p; in
+            if f == true then lib.removePrefix "dsh-" name else f;
+          faceNames = lib.attrValues (lib.mapAttrs faceName enabled);
+          _dupAssert =
+            if builtins.length faceNames != builtins.length (lib.unique faceNames) then
+              throw "programs.dsh.plugins: duplicate face names (${concatStringsSep ", " faceNames})"
+            else if any (f: !validFace f) faceNames then
+              throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and the dsh <face> subcommand name"
+            else null;
+           # 依赖冲突:skills/presets 的发现插件在 base 树默认启用,显式
+           # disable 会让物化文件无人消费 —— 静默失效比报错更糟,eval 期
+           # fail-loud。(MCP 插件随 insert 行自带,无此冲突;presets 的
+           # roster 行只在 tui/web 树存在,headless 本就无 preset 语义,
+           # 属上游 per-face 行为而非冲突)
+           # 三态 typed 选项 × inBoxPlugins 同组 id 显式对着干 → 同理
+           # fail-loud(typed 层与用户层会产出语义冲突的行组)
+           _usageAssert =
+             let
+               inbox = id: (cfg.inBoxPlugins or { }).${id} or { enable = null; };
+               # 中间绑定而非 `inbox "x".enable` 直连:避免选择器解析歧义
+               skillProvider = inbox "skill-filesystem";
+               presetRoster = inbox "agent-presets";
+                wsNull = (cfg.webSearch or null) == null;
+                dshNull = (cfg.llmDeepseek or null) == null;
+                piAiNull = (cfg.providers or { }) == null;
+                wsProviders = cfg.webSearchProviders or { };
+                # 选择器形态:webSearch 非 null → id 必须在声明表 ∪ base
+                # 自带集;非 base id 必须已声明(包源/参数都在声明条目)
+                wsKnown =
+                  [ "deepseek-official" ] ++ (attrNames wsProviders);
+                wsUnknown = !wsNull && !builtins.elem cfg.webSearch wsKnown;
+                wsOrphanProviders = wsNull && wsProviders != { };
+                # typed 启用(非 null)但 inBoxPlugins 显式禁同组行
+                wsClash =
+                 !wsNull && (inbox "web").enable == false
+                 || !wsNull && (inbox "web-search-deepseek").enable == false
+                 || !wsNull && (inbox "tool-web").enable == false
+                 || !wsNull && (inbox "web-search-exa").enable == false;
+               dshClash = !dshNull && (inbox "llm-deepseek").enable == false;
+               piAiClash = piAiNull && (inbox "llm-pi-ai").enable == false;
+               # typed 禁用(null)但配置仍指向它 —— 意图自相矛盾。
+               # 注意:defaultModel.provider 无法 eval 期判归属(pi-ai
+               # catalog 路由名与 llm-deepseek id "deepseek-official"
+               # 无先验区分,不猜)—— 只查可判定的 settings 声明;
+               # 唯一可靠例外是 deepseek-official(llm-deepseek 固定 id)
+               piAiOrphan = piAiNull && (cfg.settings or { }) ? "llm-pi-ai";
+               dshOrphan = dshNull && (cfg.defaultModel or null) != null
+                 && cfg.defaultModel.provider == "deepseek-official";
+                # fetch 缝(镜像 ws 组):无 base 自带集,选中必在声明表
+                wfNull = (cfg.webFetch or null) == null;
+                wfProviders = cfg.webFetchProviders or { };
+                wfUnknown = !wfNull && !builtins.elem cfg.webFetch (attrNames wfProviders);
+                wfOrphanProviders = wfNull && wfProviders != { };
+                wfClash = !wfNull && (inbox "tool-web").enable == false;
+             in
+             if (cfg.skills or { }) != { } && skillProvider.enable == false then
+               throw "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider"
+             else if (cfg.presets or { }) != { } && presetRoster.enable == false then
+               throw "programs.dsh: presets are declared but inBoxPlugins.agent-presets.enable = false — the preset roster is disabled; remove the presets or re-enable the roster"
+              else if wsClash then
+                throw "programs.dsh: webSearch is set but inBoxPlugins disables one of web/web-search-deepseek/web-search-exa/tool-web — use webSearch alone (null disables the capability rows)"
+              else if wsUnknown then
+                throw "programs.dsh: webSearch = \"${cfg.webSearch}\" is not a declared webSearchProviders entry nor \"deepseek-official\" — declare the backend in webSearchProviders or select a known id"
+              else if wsOrphanProviders then
+                throw "programs.dsh: webSearchProviders is non-empty but webSearch = null (capability disabled) — declared backends would never run; set webSearch to a declared id or clear the table"
+              else if dshClash then
+                throw "programs.dsh: llmDeepseek is set but inBoxPlugins.\"llm-deepseek\".enable = false — use llmDeepseek alone (null disables the row)"
+              else if piAiClash then
+                throw "programs.dsh: providers = null but inBoxPlugins.\"llm-pi-ai\".enable = false is redundant — providers = null already disables the row"
+              else if piAiOrphan then
+                throw "programs.dsh: providers = null but settings.\"llm-pi-ai\" is declared (or defaultModel routes through pi-ai) — a disabled adapter cannot consume them; set providers = {} or drop the declarations"
+              else if dshOrphan then
+                throw "programs.dsh: llmDeepseek = null but defaultModel.provider = \"deepseek-official\" — the default route points at a disabled adapter; enable llmDeepseek or re-route defaultModel"
+              else if wfClash then
+                throw "programs.dsh: webFetch is set but inBoxPlugins disables tool-web — the fetch tool row must stay enabled (webFetch renders its fetch: true restatement)"
+              else if wfUnknown then
+                throw "programs.dsh: webFetch = \"${cfg.webFetch}\" is not a declared webFetchProviders entry — the fetch seam has no base-shipped backend; declare the backend first"
+              else if wfOrphanProviders then
+                throw "programs.dsh: webFetchProviders is non-empty but webFetch = null (capability disabled) — declared backends would never run; set webFetch to a declared id or clear the table"
+              else null;
+           gen = lib.mapAttrs'
+             (name: p:
+               let fname = faceName name p; in
+               lib.nameValuePair fname (
+                 if p.profiles != [ ] then
+                   throw "programs.dsh.plugins.${name}: face plugin cannot also list target profiles (faces are mutually exclusive trees)"
+                 else if builtins.elem fname (attrNames cfg.profiles) then
+                   throw "programs.dsh: face '${fname}' conflicts with explicitly declared profiles.${fname}"
+                 else {
+                   plugins = [ "@deepseek-ai/dsh-base" (faceSourceOf name p) ];
+                   userPatchesFile = null;
+                   userPatches = [ ];
+                 }
+               ))
+             enabled;
+        in
+        builtins.seq _dupAssert (builtins.seq _usageAssert gen);
+      allProfileNames = (attrNames cfg.profiles) ++ (attrNames facePlugins);
+      targetsFor = p:
+        if p.profiles == [ ] then allProfileNames
+        else filter (n: builtins.elem n allProfileNames) p.profiles;
+      patchRows = p:
+        (lib.optional (p.settings != { }) (
+          if p.patchId == null then
+            throw "programs.dsh.plugins: settings given but patchId is null"
+          else { id = p.patchId; config = p.settings; }
+        ))
+        ++ p.patches;
+      contributions = mapAttrsToList
+        (name: con: {
+          profiles = targetsFor con;
+          plugin = { inherit name; source = sourceOf name con; };
+          patches = patchRows con;
+        })
+        (lib.filterAttrs (name: p: p.enable && faceOf name p == null) cfg.plugins);
+      # in-box 条目行(全局,进所有 profile 的用户 patch 层;行级 disabled 键
+      # 是 cordis loader 原生语义,实测可双向覆盖 bundle 层的 disabled)
+      inBoxPatches =
+        mapAttrsToList
+          (id: p:
+            { inherit id; }
+            // (lib.optionalAttrs (p.enable != null) { disabled = !p.enable; })
+            // (lib.optionalAttrs (p.config != { }) { inherit (p) config; }))
+          cfg.inBoxPlugins;
+      # MCP 服务器行(rc.5 dsh-mcp-client 实测):插件不在默认树,每 server
+      # 一个条目,包裹成 insert 行 —— cordis patch applier 对组合树里不
+      # 存在的 id 只 warn+skip(实测 cordis-plugin-include:`patch: entry
+      # not found`,7 行全丢、/mcp 空屏),新条目必须走 insert 通道
+      # (data.push)。config 判别联合由 transport 定形;null/空省略;
+      # settings 逃生口最后并。env/headers 值支持 secretFile 形态 →
+      # 占位符渲染(见 renderSecretVal),refs 收集给 wrapper 注入。
+      # 插件随行:设置 mcpServers 即插入 @deepseek-ai/dsh-mcp-client,
+      # 无法经 inBoxPlugins 关闭(id 不在树上,disable 行同样 not-found
+      # 跳过)—— 不装就删 mcpServers 条目
+      mcpSecret =
+        let
+          renderServer = name: m:
+            let
+              common = { inherit (m) transport; serverName = name; }
+                // (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                  toolCallTimeoutMs = m.toolCallTimeoutMs or null;
+                  failOnStartupError = m.failOnStartupError or null;
+                })
+                // (m.settings or { });
+              body =
+                if m.transport == "stdio" then
+                  lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                    inherit (m) args env;
+                    command = m.command or null;
+                    cwd = m.cwd or null;
+                  }
+                else
+                  lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                    url = m.url or null;
+                      headers = m.headers or { };
+                    };
+            in
+            {
+              id = "mcp-${name}";
+              name = "@deepseek-ai/dsh-mcp-client";
+              config = common // body;
+            };
+          renderedServers = mapAttrs renderServer (cfg.mcpServers or { });
+          # env/headers 二次渲染为占位符,同时收集 refs
+          withSecrets = mapAttrs
+            (name: row:
+              let
+                env' = if row.config ? env then (renderSecretAttrs row.config.env).data else { };
+                headers' = if row.config ? headers then (renderSecretAttrs row.config.headers).data else { };
+                allRefs =
+                  (if row.config ? env then (renderSecretAttrs row.config.env).refs else [ ])
+                  ++ (if row.config ? headers then (renderSecretAttrs row.config.headers).refs else [ ]);
+              in
+              {
+                row = row // {
+                  config = removeAttrs row.config [ "env" "headers" ]
+                    // (optionalAttrs (env' != { }) { env = env'; })
+                    // (optionalAttrs (headers' != { }) { headers = headers'; });
+                };
+                refs = allRefs;
+              })
+            renderedServers;
+        in
+        {
+          rows = map (row: { insert = [ row ]; })
+            (attrValues (mapAttrs (_: w: w.row) withSecrets));
+          refs = lib.unique (concatMap (w: w.refs) (attrValues withSecrets));
+        };
+      mcpPatches = mcpSecret.rows;
+      mcpSecretRefs = mcpSecret.refs;
+       # 配置承载型三态的 patch 侧。webSearch 是选择器形态(README:声明
+       # 必有效,在场或被选择器解释):
+       #   null  → 骨架(web/tool-web)+ base 自带后端(deepseek)全禁
+       #   str   → 骨架启用(树自带行不动);未选中后端禁行(死卡清理:
+       #           未选中 provider 在场只有死 UI/必败调用)
+       # 追加在 inBoxPatches 之后,同 id 后行胜过(_usageAssert 拦显式
+       # 冲突;顺带的 enable=null 不表态无冲突)。
+       # ⚠ "选中才启用"的前提:provider 切换在上游是**行级变化**
+       # (dsh-web 源码实证:WebRuntime 无 settings 命名空间,
+       # searchProvider 是行 Config,构造器一次性定格,env
+       # DSH_WEB_SEARCH_PROVIDER 也仅 boot 读)——声明并在场但未选中
+       # 只会留死卡,禁行无运行时代价。若上游将来把选择 id 接进 settings
+       # 热重载(即可运行时切换),此策略应改为"声明即在,选择器热切",
+       # 本行组随之收敛为能力骨架行(web/tool-web)。
+       cfgWs = cfg.webSearch or null;
+       cfgWsProviders = cfg.webSearchProviders or { };
+       # 后端声明归一:id → { rowId; rowName(null=base 自带); rowConfig;
+       # source(null=base 自带); namespace(null=无 settings 段) }。
+       # 预置 = 默认值里的完整声明(语法糖,非代码分支):新后端接入 =
+       # 一条声明带 row/source,零 nixdsh 改动(开放注册表)
+       wsBackend = id: p:
+         let
+           # 显式声明(带 row.name 的 = 非 base 自带);裸 attrs = base
+           # 自带后端的纯参数声明(向后兼容预置写法)
+           hasRow = p ? row && p.row ? name;
+           # 行 id 缺省 = 包名尾段剥 dsh- 前缀:@tonydua/dsh-web-search-exa
+           # → web-search-exa(与包自 bundle patch 的行 id 约定一致);
+           # 尾段已带 web-search- 前缀则原样,无前缀才补(命名自由的后端)
+           rowIdOf = name:
+             let tail = lib.removePrefix "dsh-" (lib.last (lib.splitString "/" name)); in
+             if lib.hasPrefix "web-search-" tail then tail else "web-search-${tail}";
+          in
+          {
+            # submodule 输出 row.id 恒存在(default null),`or` 不触发,
+            # 须显式判空(裸 attrs 声明两种路径都走对)
+            rowId =
+              if hasRow then
+                (let id = p.row.id or null; in
+                 if id != null then id else rowIdOf p.row.name)
+              else "web-search-${id}";
+            rowName = if hasRow then p.row.name else null;
+            # secretFile 派生:行 config 未显式给 apiKeyEnv 时注入派生值
+            #(行自描述,免疫上游默认漂移;显式 apiKeyEnv 优先)
+            rowConfig =
+              let
+                base = if hasRow then (p.row.config or { }) else (removeAttrs p [ "settings" "source" ]);
+              in
+              if hasRow && (p.row.secretFile or null) != null && !(base ? apiKeyEnv) then
+                base // { apiKeyEnv = secretEnvName p.row.secretFile; }
+              else base;
+          source = if hasRow then (p.source or null) else null;
+          # 同 rowId:submodule 下 or 不触发,显式判空
+          namespace =
+            let ns = if hasRow then (p.row.settingsNamespace or null) else null; in
+            if ns != null then ns else "web-search-${id}";
+        };
+       wsBackends = mapAttrs wsBackend
+         (cfgWsProviders // { "deepseek-official" = cfgWsProviders."deepseek-official" or { }; });
+       # 未选中后端行(声明了但未选中 → 禁行;base 自带的 deepseek 行
+       # 同理:能力禁用或选中别的)
+       wsDisable =
+        # 骨架:能力禁用时
+        (lib.optionals (cfgWs == null) [ "web" "tool-web" ])
+        # base 自带 deepseek 行:能力禁用,或选中的不是它
+        ++ (lib.optionals (cfgWs == null || cfgWs != "deepseek-official")
+          [ "web-search-deepseek" ])
+        # 非 base 后端行(声明了但未选中;有 rowId 的才算得出)
+        ++ (lib.filter (id: id != cfgWs && wsBackends.${id}.rowName != null)
+          (attrNames cfgWsProviders));
+       capabilityPatches =
+        (map (id: { inherit id; disabled = true; }) wsDisable)
+        ++ (lib.optionals ((cfg.llmDeepseek or null) == null)
+          [ { id = "llm-deepseek"; disabled = true; } ])
+        ++ (lib.optionals ((cfg.providers or { }) == null)
+          [ { id = "llm-pi-ai"; disabled = true; } ]);
+      # 选中后端(带 row.name = 非 base)→ insert 行;base 自带后端无行
+      #(树里已有)。行 config = 声明的 row.config
+      wsProviderRows =
+        let sel = if cfgWs == null then null else wsBackends.${cfgWs} or null; in
+        lib.optionals (sel != null && sel.rowName != null) [
+          {
+            id = sel.rowId;
+            name = sel.rowName;
+            config = sel.rowConfig;
+          }
+        ];
+      # 选中后端的包源(非 base 自带才有;声明 source 或 registry 尾名反查)
+      wsProviderSources =
+        let sel = if cfgWs == null then null else wsBackends.${cfgWs} or null; in
+        lib.optionals (sel != null && sel.rowName != null)
+          (if sel ? source && sel.source != null && sel != null then [ sel.source ]
+           else [ (registryLookup sel.rowId) ]);
+      # 选中非 base 后端 → web 行重述 searchProvider(patch 整行替换,
+      # base 行只此一键,重述干净)
+      wsSelectorRow =
+        if cfgWs != null && cfgWs != "deepseek-official" then
+          [ { id = "web"; config = { searchProvider = cfgWs; }; } ]
+        else [ ];
+      # ── fetch 缝(镜像 ws 组;差异:无 base 自带后端 → 无裸 attrs 形态,
+      # 无骨架行(默认态 = base 现状 fetch: false,非禁行),选中必声明)
+      cfgWf = cfg.webFetch or null;
+      cfgWfProviders = cfg.webFetchProviders or { };
+      wfBackend = id: p:
+        let
+          rowIdOf = name:
+            let tail = lib.removePrefix "dsh-" (lib.last (lib.splitString "/" name)); in
+            if lib.hasPrefix "web-fetch-" tail then tail else "web-fetch-${tail}";
+          base = p.row.config or { };
+        in
+        {
+          # 显式判空:submodule 输出 row.id/settingsNamespace 恒存在(default
+          # null),`or` 不触发(checks 裸 attrs 直调测不到 module 路径)
+          rowId =
+            let id = p.row.id or null; in
+            if id != null then id else rowIdOf p.row.name;
+          rowName = p.row.name;
+          rowConfig =
+            if (p.row.secretFile or null) != null && !(base ? apiKeyEnv) then
+              base // { apiKeyEnv = secretEnvName p.row.secretFile; }
+            else base;
+          source = p.source or null;
+          namespace =
+            let ns = p.row.settingsNamespace or null; in
+            if ns != null then ns else "web-fetch-${id}";
+        };
+      wfBackends = mapAttrs wfBackend cfgWfProviders;
+      # 选中 → insert 行 + web 行重述 fetchProvider + tool-web 行重述
+      # fetch: true(base 的 SSRF 保险丝;委托型 provider 无此面,显式
+      # 打开 —— 打开动作本身即"我信任这个 provider 的 SSRF 姿态"声明)
+      wfProviderRows =
+        let sel = if cfgWf == null then null else wfBackends.${cfgWf} or null; in
+        lib.optionals (sel != null) [
+          { id = sel.rowId; name = sel.rowName; config = sel.rowConfig; }
+          { id = "web"; config = { fetchProvider = cfgWf; }; }
+          { id = "tool-web"; config = { fetch = true; }; }
+        ];
+      wfDisable =
+        # 声明未选中后端行(备案待命 → 禁行,死卡清理;同 ws 语义)
+        lib.filter (id: id != cfgWf) (attrNames cfgWfProviders);
+      wfDisableRows = map (id: { id = wfBackends.${id}.rowId; disabled = true; }) wfDisable;
+      wfProviderSources =
+        let sel = if cfgWf == null then null else wfBackends.${cfgWf} or null; in
+        lib.optionals (sel != null)
+          (if sel.source != null then [ sel.source ]
+           else [ (registryLookup sel.rowId) ]);
+      # fetch 缝行组(未选中禁行 + 选中 insert/选择器/保险丝)
+      wfRows = wfDisableRows ++ wfProviderRows;
+    in
+    {
+      # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜过)
+      inherit inBoxPatches;
+      # MCP 服务器行(同样全局,追加在 in-box 行之后)
+      mcpPatches = mcpPatches;
+      # 三态 typed 选项的行组(disable + 后端行 + 选择器行;追加在 in-box 行之后)
+      inherit capabilityPatches wsProviderRows wsSelectorRow wfRows;
+      # secret 占位符引用的文件路径清单(wrapper 注入块消费)
+      inherit mcpSecretRefs;
+      # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
+      inherit facePlugins;
+      # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
+      # 覆盖显式 profile 与自动 face 两类)
+      perProfile = listToAttrs
+        (map
+          (profileName: nameValuePair profileName {
+            extraPlugins =
+              (map (c: c.plugin.source)
+                (filter (c: builtins.elem profileName c.profiles) contributions))
+              ++ (lib.filter (s: s != null) wsProviderSources)
+              ++ (lib.filter (s: s != null) wfProviderSources);
+            extraPatches =
+              (concatMap (c: c.patches)
+                (filter (c: builtins.elem profileName c.profiles) contributions))
+              ++ inBoxPatches
+              ++ capabilityPatches
+              ++ wsProviderRows
+              ++ wsSelectorRow
+              ++ wfRows
+              ++ mcpPatches;
+          })
+          allProfileNames);
+    };
+in
+{
+  inherit applyPlugins;
+}

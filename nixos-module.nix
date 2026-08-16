@@ -5,7 +5,7 @@
 { config, lib, pkgs, ... }:
 
 let
-  dshLib = import ./lib.nix { inherit lib; };
+  dshLib = import ./lib { inherit lib; };
   cfg = config.programs.dsh;
   wrapper = dshLib.renderWrapper { inherit cfg pkgs; name = cfg.binName; };
 in

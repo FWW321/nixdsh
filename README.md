@@ -71,15 +71,24 @@ nixdsh/
 │                      #   + pnpm deploy 最小闭包 + 全套 installCheck:
 │                      #   boot web/HTTP 探针、真 PTY、koffi/sharp、Landlock、
 │                      #   坏链接与 build 路径泄漏扫描)
-├── lib.nix            # 核心纯函数库:
-│                      #   mkPlugin/mkProfile/buildProfile  profile→不可变 store 工件
-│                      #   applyPlugins                     typed 插件层→profile 增量
-│                      #   renderWrapper                    yq-merge settings + profile 注入
-│                      #   mkDsh                            nixvim 的 mkNixvim 同构独立实例化
+├── lib/                # 核心纯函数库(单向 DAG: inbox,secret → settings,apply
+│   ├── inbox.nix       #   → wrapper → mkDsh):
+│   │                   #   mkPlugin/mkProfile/buildProfile  profile→不可变 store 工件
+│   ├── secret.nix      #   secretEnv(env 桥)/renderSecretAttrs(占位符通道)
+│   ├── settings.nix    #   renderSettings/validatePresets/validateSkills
+│   ├── apply.nix       #   applyPlugins(typed 层→profile 增量+face+能力缝行组)
+│   ├── wrapper.nix     #   renderWrapper/renderCompletion/upstreamSubcommands
+│   ├── mkDsh.nix       #   mkDsh: nixvim 的 mkNixvim 同构独立实例化
+│   └── default.nix     #   组装 + 公共 API 导出
 ├── modules/options.nix# programs.dsh 共享 options(HM/NixOS/mkDsh 三方消费)
 ├── hm-module.nix      # HM 消费面:wrapper(子命令分发) + activation 物化 + systemd user 服务
 ├── nixos-module.nix   # 薄 NixOS 消费面(systemPackages)
-├── checks.nix         # profile 模型验证:结构/正例/负例 fail-loud
+├── checks/            # profile 模型验证:结构/正例/负例 fail-loud
+│   ├── fixtures.nix   #   共享夹具(applyWith/mkFakeCfg/materialize/inTreeCheck)
+│   ├── profile.nix    #   bundle 形状/boot 正负例/face 四态/in-box 行
+│   ├── seam.nix       #   webSearch/webFetch 缝行组/secretFile 桥/in-tree×3
+│   ├── mcp.nix        #   MCP 行渲染/secret 注入/insert 通道
+│   └── sources.nix    #   providers 合并/presets/skills 校验
 ├── plugins/           # dshPlugins 集合(vimPlugins 同构):
 │   ├── names.txt      #   手动清单 owner/repo [subpath](= vim-plugin-names)
 │   ├── update.sh      #   updater:tag 优先/HEAD 回退 + prefetch + 元数据物化
@@ -114,7 +123,7 @@ nixdsh/
     **交互面 profile 的最终树 = base 全套行 + 该 face 树叠层**(实测三 face
     物化 bundles 完全一致:`web = [dsh-base, dsh-web-app]`、`headless =
     [dsh-base, dsh-headless]`、`tui = [dsh-base, dsh-tui]`;模块配方
-    lib.nix `[ "@deepseek-ai/dsh-base" source ]` 与物化一一对应)。boot 按
+    lib/inbox.nix `[ "@deepseek-ai/dsh-base" source ]` 与物化一一对应)。boot 按
     bundles 有序叠 patch、同 id 后行胜出 —— base 的全部行(`llm-pi-ai`/
     `web`/`web-search-deepseek`/`tool-web`/...)在**三个 face 的最终树里
     都在**;face 树只是覆盖层(dsh-tui 自带的 `llm-deepseek` 强意见默认
@@ -233,7 +242,7 @@ provider 全注册(模型可手切,活备选);webSearch 侧仅选中者启用
 (web 搜索无切换面,未选中 = 死卡 → 禁行)。⚠ 后者的前提是上游
 **无运行时 provider 切换**(dsh-web 实证:`searchProvider` 是行
 Config 非命名空间段,构造器定格)—— 若上游将来支持热切,该策略
-改为"声明即在,选择器热切"(lib.nix capabilityPatches 注释有同步
+改为"声明即在,选择器热切"(lib/apply.nix capabilityPatches 注释有同步
 标记)。
 
 **可见性规则:每个 UI 面跟随拥有它的行**(实测 rc.6)。禁用一个行后,

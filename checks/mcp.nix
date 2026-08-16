@@ -1,0 +1,176 @@
+# MCP 域:行渲染(insert 包裹/判别联合/secret 占位符)、secret 注入
+# 行为级(真跑 wrapper 启动块)、insert 通道端到端(真 boot 进树)
+{ pkgs, dshLib, fx }:
+
+let
+  inherit (fx) applyWith mkFakeCfg;
+in
+{
+  # MCP 服务器行渲染:判别联合(stdio/streamable-http)、null 省略、
+  # settings 逃生口并入、serverName = attr 名
+  dsh-mcp-render =
+    let
+      rows = (applyWith {
+        mcpServers = {
+          filesystem = {
+            transport = "stdio";
+            command = "/run/current-system/sw/bin/npx";
+            args = [ "-y" "@modelcontextprotocol/server-filesystem" "/home" ];
+            env = { };
+            cwd = null;
+            url = null;
+            headers = { };
+            toolCallTimeoutMs = null;
+            failOnStartupError = false;
+            settings = { reconnect.maxAttempts = 5; };
+          };
+          remote = {
+            transport = "streamable-http";
+            url = "https://mcp.example.com/mcp";
+            headers = {
+              Authorization.secretFile = "/run/secrets/fake-token";
+              Authorization.prefix = "Bearer ";
+              X-Plain = "literal";
+            };
+            command = null;
+            args = [ ];
+            env = { };
+            cwd = null;
+            toolCallTimeoutMs = 30000;
+            failOnStartupError = false;
+            settings = { };
+          };
+          gh = {
+            transport = "stdio";
+            command = "gh";
+            env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = "/run/secrets/fake-gh";
+            args = [ ];
+            cwd = null;
+            url = null;
+            headers = { };
+            toolCallTimeoutMs = null;
+            failOnStartupError = false;
+            settings = { };
+          };
+        };
+      }).mcpPatches;
+      byId = builtins.listToAttrs (map
+        (r: { name = r.id; value = r; })
+        (pkgs.lib.flatten (map (r: r.insert or [ ]) rows)));
+      fs = byId."mcp-filesystem".config;
+      rm = byId."mcp-remote".config;
+      gh = byId."mcp-gh".config;
+      allInsertShaped = builtins.all (r: r ? insert && builtins.length r.insert == 1) rows;
+      refs = (applyWith {
+        mcpServers = { gh.env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = "/run/secrets/fake-gh"; };
+      }).mcpSecretRefs;
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-mcp-render-check" { } (builtins.seq ([
+      (assert' allInsertShaped "dsh-mcp-render: rows must be insert-wrapped (patch rows for unknown ids are warn-skipped by the loader)")
+      (assert' (byId ? "mcp-filesystem" && byId ? "mcp-remote" && byId ? "mcp-gh") "dsh-mcp-render: one entry per server must render")
+      (assert' (fs.serverName == "filesystem" && fs.command != null) "dsh-mcp-render: stdio server must carry serverName+command")
+      (assert' (!fs ? cwd && !fs ? toolCallTimeoutMs) "dsh-mcp-render: null fields must be omitted")
+      (assert' (fs.reconnect.maxAttempts == 5) "dsh-mcp-render: settings escape hatch must merge into config")
+      (assert' (rm ? url && rm ? headers && rm.toolCallTimeoutMs == 30000) "dsh-mcp-render: streamable-http must carry url/headers")
+      (assert' (!rm ? command && !rm ? args) "dsh-mcp-render: http server must not carry stdio fields")
+      (assert' (rm.headers.Authorization == "Bearer @dsh-secret:/run/secrets/fake-token@") "dsh-mcp-render: secretFile header must render prefix+placeholder")
+      (assert' (rm.headers.X-Plain == "literal") "dsh-mcp-render: literal header must stay literal")
+      (assert' (gh.env.GITHUB_PERSONAL_ACCESS_TOKEN == "@dsh-secret:/run/secrets/fake-gh@") "dsh-mcp-render: secretFile env must render bare placeholder")
+      (assert' (builtins.length refs == 1 && builtins.head refs == "/run/secrets/fake-gh") "dsh-mcp-render: mcpSecretRefs must dedupe and collect")
+    ]) "touch $out");
+
+  # secret 注入行为级验证:真跑 wrapper 启动块,对物化 patch 注入真值,
+  # 验证 0600/占位符清零(build 沙箱 /tmp 可写,fixed home 固定路径)
+  dsh-mcp-secret-inject =
+    let
+      home = "/tmp/dsh-inject-check-home";
+      secretFile = "/tmp/dsh-inject-check-secret";
+      wrapper = dshLib.renderWrapper {
+        cfg = mkFakeCfg {
+          dshHome = home;
+          defaultProfile = "default";
+          mcpServers = {
+            gh = {
+              transport = "stdio";
+              command = "true";
+              env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = secretFile;
+              args = [ ];
+              cwd = null;
+              url = null;
+              headers = { };
+              toolCallTimeoutMs = null;
+              failOnStartupError = false;
+              settings = { };
+            };
+          };
+          profiles = { default = { plugins = [ ]; userPatches = [ ]; }; };
+          plugins = { };
+          inBoxPlugins = { };
+        };
+        inherit pkgs;
+      };
+      # 模拟 activation 产物:bundle patch 含占位符
+      placeholderPatch = pkgs.writeText "cordis.patch.yml" ''
+        - id: mcp-gh
+          name: '@deepseek-ai/dsh-mcp-client'
+          config:
+            env:
+              GITHUB_PERSONAL_ACCESS_TOKEN: '@dsh-secret:${secretFile}@'
+      '';
+    in
+    pkgs.runCommand "dsh-mcp-secret-inject-check" { } ''
+      install -D -m 0644 ${placeholderPatch} ${home}/profiles/default/cordis.patch.yml
+      printf 'REALTOKEN123\n' > ${secretFile}
+      ${wrapper}/bin/dsh >/dev/null 2>&1 || true
+      pf=${home}/profiles/default/cordis.patch.yml
+      grep -q REALTOKEN123 "$pf" || { echo "secret not injected"; cat "$pf"; exit 1; }
+      ! grep -q '@dsh-secret:' "$pf" || { echo "placeholder survived"; exit 1; }
+      [ "$(stat -c %a "$pf")" = "600" ] || { echo "mode not 0600: $(stat -c %a "$pf")"; exit 1; }
+      touch $out
+    '';
+
+  # MCP 行必须真的进组合树:patch 形状(带 id 的顶层行)对树上不存在的
+  # id 只 warn+skip(实测 cordis-plugin-include,7 行全丢 → /mcp 空屏),
+  # 此 check 用 dump-config 端到端验证 insert 通道生效。
+  # (bundle 手工构建:userPatches 只取 mcpRows,plugins 只 base —— 与
+  # inTreeCheck 的 perProfile 全量通道不同,mcp 行不依赖 provider 源)
+  dsh-mcp-in-tree =
+    let
+      mcpRows = (applyWith {
+        mcpServers.probe = {
+          transport = "stdio";
+          command = "true";
+          args = [ ];
+          env = { };
+          cwd = null;
+          url = null;
+          headers = { };
+          toolCallTimeoutMs = null;
+          failOnStartupError = false;
+          settings = { };
+        };
+      }).mcpPatches;
+      bundle = dshLib.buildProfile {
+        inherit pkgs;
+        profile = dshLib.mkProfile {
+          name = "mcp-tree";
+          plugins = [ "@deepseek-ai/dsh-base" ];
+          userPatchesFile = null;
+          userPatches = mcpRows;
+        };
+      };
+    in
+    pkgs.runCommand "dsh-mcp-in-tree-check" { } ''
+      ${fx.materialize "mcp-tree" bundle}
+      ${pkgs.dsh}/bin/dsh --profile mcp-tree --dump-config > "$TMPDIR/dump.log" 2>&1 \
+        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      grep -q 'mcp-probe' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "mcp entry missing from composed tree" >&2; exit 1;
+      }
+      ! grep -q 'entry "mcp-probe" not found' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "mcp row was warn-skipped (patch shape, not insert)" >&2; exit 1;
+      }
+      touch $out
+    '';
+}

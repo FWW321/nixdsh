@@ -9,11 +9,11 @@
 #      cordis.yml,故物化为可写副本而非 symlink)
 #   - systemd.user.services.dsh-web:常驻 dsh web(open-design 同形态)
 # typed 插件层(programs.dsh.plugins.<name>)经 dshLib.applyPlugins 折进
-# 各 profile 的 plugins/userPatches(见 lib.nix)
+# 各 profile 的 plugins/userPatches(见 lib/)
 { config, lib, pkgs, ... }:
 
 let
-  dshLib = import ./lib.nix { inherit lib; };
+  dshLib = import ./lib { inherit lib; };
   cfg = config.programs.dsh;
 
   # typed 插件层增量 + in-box 条目行 + 原始 profile 声明 + face 自动 profile

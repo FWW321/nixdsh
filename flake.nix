@@ -48,7 +48,7 @@
             overlays = [ self.overlays.default ];
           };
         in
-        import ./checks.nix { inherit pkgs; });
+        import ./checks { inherit pkgs; });
 
       # dshPlugins 集合更新器(vimPlugins update.py 个人规模 transpose,Python)
       apps = forEachSystem (system:
@@ -66,6 +66,6 @@
 
       # nixvim 式独立实例化 API(与 mkDsh 同构;checks/外部消费者用)
       lib.mkDsh = { pkgs ? import nixpkgs { system = "x86_64-linux"; overlays = [ self.overlays.default ]; }, modules ? [ ], extraSpecialArgs ? { } }:
-        (import ./lib.nix { inherit (nixpkgs) lib; }).mkDsh { inherit pkgs modules extraSpecialArgs; };
+        (import ./lib { inherit (nixpkgs) lib; }).mkDsh { inherit pkgs modules extraSpecialArgs; };
     };
 }

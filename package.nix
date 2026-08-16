@@ -8,7 +8,7 @@
 # 真 PTY、koffi/sharp 原生模块加载、Landlock 沙箱探针、坏链接/build 路径泄漏扫描。
 #
 # 注入为 nixpkgs overlay → pkgs.dsh(见 pkgs/default.nix)
-# profile 模型/lib.mkDsh 见同目录 lib.nix;HM 模块见 hm-module.nix
+# profile 模型/lib.mkDsh 见同目录 lib/;HM 模块见 hm-module.nix
 {
   bashInteractive,
   fetchFromGitHub,
