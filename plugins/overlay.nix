@@ -103,6 +103,7 @@ let
       passthru = {
         packageName = name;
         dshBundlePatch = e.bundlePatch or null;
+        dshFace = e.face or null;
       };
 
       meta = with lib; {
@@ -118,6 +119,7 @@ let
         passthru = {
           packageName = name;
           dshBundlePatch = e.bundlePatch or null;
+          dshFace = e.face or null;
         };
         meta = with lib; {
           description = "dsh plugin source: ${e.owner}/${e.repo}@${e.version}";

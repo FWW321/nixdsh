@@ -113,7 +113,17 @@ def main() -> None:
             continue
         parts = line.split()
         owner, repo = parts[0].split("/", 1)
-        subpath = parts[1] if len(parts) > 1 else ""
+        # 尾参两类:face=<名>(交互面标记,收录时人审判定 —— 互斥语义无法
+        # 自动推导:id 冲突之外还有 TTY 等运行期约束)或 subpath。
+        # face 物化进 generated.nix → 用户 plugins.<name>.enable 即自动生成
+        # face profile;subpath 为 monorepo 子目录
+        subpath = ""
+        face = ""
+        for p in parts[1:]:
+            if p.startswith("face="):
+                face = p.removeprefix("face=")
+            elif not subpath:
+                subpath = p
 
         rev, version = resolve_version(owner, repo)
         print(f"→ {owner}/{repo}: {version} ({rev[:12]})")
@@ -146,6 +156,8 @@ def main() -> None:
         ]
         if subpath:
             fields.append(("subpath", subpath))
+        if face:
+            fields.append(("face", face))
         if patch := (manifest.get("dsh", {}).get("bundle", {}).get("patch")):
             fields.append(("bundlePatch", patch))
         # peers 物化:peerDependencies 的包名列表(宿主 dsh 安装是 peer 的

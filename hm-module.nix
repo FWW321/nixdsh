@@ -92,7 +92,24 @@ in
     # unstable HM:dag 在 config.lib(lib 参数未扩展,lib.hm.dag 已移除)
     home.activation.dshProfiles =
       config.lib.dag.entryAfter [ "writeBoundary" ]
-      (lib.concatStringsSep "\n" (lib.mapAttrsToList activateProfile profileBundles));
+      (lib.concatStringsSep "\n" (lib.mapAttrsToList activateProfile profileBundles)
+      + ''
+
+        # 孤儿清理:带 stamp(本模块物化)但已不在当前 profile 集的目录
+        # (face 插件移除/profile 改名后遗留;wrapper 由 home.packages
+        # 常规清理,目录在 HM 管辖外须自扫)。无 stamp 的目录是用户
+        # dsh plugin add 创建的,不碰
+        _keep="${lib.concatStringsSep " " (lib.attrNames finalProfiles)}"
+        for _dir in "${cfg.dshHome}"/profiles/*; do
+          [ -e "$_dir" ] || continue
+          [ -f "$_dir/.dsh-nix-stamp" ] || continue
+          _name="$(basename "$_dir")"
+          case " $_keep " in
+            *" $_name "*) ;;
+            *) rm -rf "$_dir" ;;
+          esac
+        done
+      '');
 
     systemd.user.services.dsh-web = lib.mkIf cfg.web.enable {
       Unit = {

@@ -33,8 +33,8 @@ let
     "@deepseek-ai/dsh-web-app"
   ];
 
-  # face 自动 profile:plugins.<name>.face 生成 [base+source] 树;
-  # face 不参与分发;功能插件 profiles=[] 分发到所有 face(含自动生成的)
+  # face 四态语义:true=键名派生(module system 键唯一)/false=压制推导/
+  # null=in-box 表推导;face 插件不参与分发,功能插件分发到含自动 face
   dsh-face-gen =
     let
       r = dshLib.applyPlugins {
@@ -44,27 +44,26 @@ let
           plugins = {
             "web-app" = {
               enable = true;
-              face = "web";
+              face = null; # ← in-box 表推导出 "web"
               source = "@deepseek-ai/dsh-web-app";
               profiles = [ ];
               settings = { };
               patches = [ ];
               patchId = null;
             };
-            "dsh-tui" = {
+            "my-desktop" = {
               enable = true;
-              face = "tui";
-              source = ./checks.nix; # 形状检查:任意源即可
+              face = true; # ← 键名派生
+              source = "@deepseek-ai/dsh-headless";
               profiles = [ ];
               settings = { };
               patches = [ ];
               patchId = null;
             };
-            # 功能插件:分发到所有 face
-            "status-rotator" = {
+            "rotator" = {
               enable = true;
-              face = null;
-              source = "/tmp/nonexistent-rotator";
+              face = false; # ← 压制(若元数据标记过 face,当功能插件用)
+              source = "./fixture-rotator";
               profiles = [ ];
               settings = { };
               patches = [ ];
@@ -74,20 +73,15 @@ let
           inBoxPlugins = { };
         };
       };
-      web = r.facePlugins.web or null;
-      tui = r.facePlugins.tui or null;
       assert' = cond: msg: pkgs.lib.assertMsg cond msg;
       assertions = toString [
-        (assert' (web != null && builtins.elemAt web.plugins 0 == "@deepseek-ai/dsh-base"
-          && builtins.elemAt web.plugins 1 == "@deepseek-ai/dsh-web-app")
-          "dsh-face-gen: web face must be [base, web-app]")
-        (assert' (tui != null && builtins.length tui.plugins == 2)
-          "dsh-face-gen: tui face must be [base, source]")
-        (assert' (r.perProfile ? web && r.perProfile ? tui)
+        (assert' (r.facePlugins ? web) "dsh-face-gen: in-box table must derive 'web' from null face")
+        (assert' (r.facePlugins ? my-desktop) "dsh-face-gen: face=true must derive attr key name")
+        (assert' (!r.facePlugins ? rotator) "dsh-face-gen: face=false must suppress to function plugin")
+        (assert' (r.perProfile ? web && r.perProfile ? my-desktop)
           "dsh-face-gen: perProfile must cover auto faces")
-        (assert' (builtins.length r.perProfile.web.extraPlugins == 1
-          && builtins.length r.perProfile.tui.extraPlugins == 1)
-          "dsh-face-gen: function plugin must distribute to every face")
+        (assert' (builtins.length r.perProfile.web.extraPlugins == 1)
+          "dsh-face-gen: suppressed (false) plugin must distribute as function plugin")
       ];
     in
     pkgs.runCommand "dsh-face-gen-check" { } (builtins.seq assertions "touch $out");

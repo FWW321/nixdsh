@@ -43,6 +43,15 @@ let
     "@deepseek-ai/dsh-headless"
   ];
 
+  # in-box 交互面:bundle 名 → face 名("web" 被 dsh web 子命令硬编码 boot)。
+  # base 不在表中(公共内核层,不是交互面)。第三方交互面由 registry 的
+  # face 字段物化(plugins/overlay.nix passthru.dshFace),显式 plugins.<name>.face
+  # 优先生效 —— 三级推导:显式声明 > registry 元数据 > in-box 表
+  inBoxFaces = {
+    "@deepseek-ai/dsh-web-app" = "web";
+    "@deepseek-ai/dsh-headless" = "headless";
+  };
+
   mkPlugin =
     {
       packageName ? null,
@@ -306,14 +315,33 @@ let
       # 交互面插件 → 自动 profile(base + 本源)。face 插件互斥不参与分发
       # (进其他树 = duplicate entry / TTY 致死,均实测),功能插件分发到
       # 所有 face(profiles = [] 缺省语义含自动生成的 face)。
+      # face 三级推导:显式 plugins.<name>.face > source derivation 的
+      # passthru.dshFace(registry 收录时人审) > inBoxFaces(in-box 表)。
+      # 无法纯自动判定互斥(id 冲突之外还有 TTY 等运行期约束,eval 期
+      # 不可见),故判定下沉为插件元数据 —— 用户侧只需 enable。
       # face 名约束 kebab-case:它被拼进文件路径($DSH_HOME/profiles/<face>)
       # 与 wrapper 名(dsh-<face>),同上游 settingsNamespace 的模式
       validFace = f:
         builtins.match "[a-z][a-z0-9]*(-[a-z0-9]+)*" f != null;
+      deriveFace = name: p:
+        if p.face != null then p.face
+        else if p.source != null && lib.isDerivation p.source
+          && (p.source.passthru or { }).dshFace or null != null then p.source.passthru.dshFace
+        else if p.source != null && builtins.isString p.source
+          && inBoxFaces ? ${p.source} then inBoxFaces.${p.source}
+        else null;
+      # 最终 face 名:null = 非交互面;false = 显式压制(registry 标记的
+      # face 当功能插件用)→ 也归 null;true = 从 attr 键派生(module system
+      # 键唯一 → 无碰撞);字符串 = 具体名。faceOf 之后只剩 null|true|str
+      faceOf = name: p:
+        let f = deriveFace name p; in
+        if f == false then null else f;
       facePlugins =
         let
-          enabled = lib.filterAttrs (_: p: p.enable && p.face != null) cfg.plugins;
-          faceName = name: p: if p.face == true then name else p.face;
+          enabled = lib.filterAttrs (name: p: p.enable && faceOf name p != null) cfg.plugins;
+          faceName = name: p:
+            let f = faceOf name p; in
+            if f == true then name else f;
           faceNames = lib.attrValues (lib.mapAttrs faceName enabled);
           _dupAssert =
             if builtins.length faceNames != builtins.length (lib.unique faceNames) then
@@ -326,7 +354,7 @@ let
               let fname = faceName name p; in
               lib.nameValuePair fname (
                 if p.source == null then
-                  throw "programs.dsh.plugins.${name}: face plugin requires an explicit source"
+                  throw "programs.dsh.plugins.${name}: face plugin requires an explicit source (or registry entry with face metadata)"
                 else if p.profiles != [ ] then
                   throw "programs.dsh.plugins.${name}: face plugin cannot also list target profiles (faces are mutually exclusive trees)"
                 else if builtins.elem fname (attrNames cfg.profiles) then
@@ -357,7 +385,7 @@ let
           plugin = { inherit name; source = sourceOf name con; };
           patches = patchRows con;
         })
-        (lib.filterAttrs (_: p: p.enable && p.face == null) cfg.plugins);
+        (lib.filterAttrs (name: p: p.enable && faceOf name p == null) cfg.plugins);
       # in-box 条目行(全局,进所有 profile 的用户 patch 层;行级 disabled 键
       # 是 cordis loader 原生语义,实测可双向覆盖 bundle 层的 disabled)
       inBoxPatches =

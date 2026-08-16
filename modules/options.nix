@@ -275,16 +275,25 @@ in
           };
           # 交互面声明:本插件是一个 UI 入口 bundle → 自动生成同名 profile
           # (plugins = [ base + 本插件源 ]),并产 dsh-<face> wrapper。
+          # 四态:null(缺省)= 从插件元数据推导(registry face= 标记 /
+          #   in-box 表),推不出 = 功能插件;true = face 名取本 attr 键
+          #   (module system 键唯一 → 无碰撞);字符串 = 显式命名(覆盖
+          #   推导;仅 web 等上游硬编码名或改 wrapper 名时需要);
+          #   false = 压制推导(registry 标记为 face 的插件当功能插件用)。
           # face 插件不参与跨 profile 分发(交互面 bundle 互斥,混树即
-          # duplicate entry / TTY 致死,均实测);功能插件照常分发到所有 face
+          # duplicate entry / TTY 致死,均实测);功能插件照常分发到所有 face。
+          # face 名约束 kebab-case(它成为 profiles/<face> 目录与
+          #   dsh-<face> wrapper 名);移除 face 插件后孤儿 profile 目录
+          #   由 activation 按 stamp 清理
           face = lib.mkOption {
             type = lib.types.nullOr (lib.types.either lib.types.bool lib.types.str);
             default = null;
-            example = "web";
+            example = true;
             description = ''
-              交互面声明。true = 以本 attr 键名为 face 名;字符串 = 显式
-              face 名(如 in-box web-app 必须叫 "web" —— dsh web 子命令
-              固定 boot 该名的 profile)。生成
+              交互面声明,通常无需设置(元数据推导覆盖 registry 与 in-box)。
+              true = face 名取本 attr 键;字符串 = 显式命名(dsh web 子命令
+              硬编码 boot 名为 "web" 的 profile — in-box web-app 已由表
+              推导,勿改);false = 压制推导。生成
               profiles.\<face\>.plugins = [ "@deepseek-ai/dsh-base" source ],
               必须给 source。与显式 profiles.\<face\> 声明互斥。
             '';
