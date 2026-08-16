@@ -310,22 +310,19 @@ let
 
   # skill 源校验(dsh-skill-filesystem 实测):单文件 .md 或目录束(目录
   # 须含 SKILL.md)。返回 { name → target 相对路径 }(文件 → <名>.md,
-  # 目录 → <名>/),供 activation 物化;非法源 throw
+  # 目录 → <名>/),供 activation 物化;非法源 throw。
+  # 判定用 pathExists 而非 builtins.pathType(后者在部分 Nix 版本缺失,
+  # 实测 nh 构建期 eval 报 attribute missing)
   validateSkills = skills:
     mapAttrs
       (name: s:
         let
           src = toString s.source;
-          isFile = builtins.pathType src == "directory";
-          dirHasSkillMd = builtins.pathExists "${src}/SKILL.md";
+          isBundle = builtins.pathExists "${src}/SKILL.md";
         in
-        if isFile then
-          if !dirHasSkillMd then
-            throw "programs.dsh.skills.${name}.source: directory ${src} has no SKILL.md (a directory skill bundles <name>/SKILL.md + optional resources)"
-          else "${name}"
-        else
-          if lib.hasSuffix ".md" src then "${name}.md"
-          else throw "programs.dsh.skills.${name}.source: file ${src} must be a .md skill (or a directory containing SKILL.md)")
+        if isBundle then "${name}"
+        else if lib.hasSuffix ".md" src then "${name}.md"
+        else throw "programs.dsh.skills.${name}.source: ${src} must be a .md skill or a directory containing SKILL.md")
       skills;
 
   # ── secret 通道(通用模式,当前消费面 mcpServers)──────────────────
