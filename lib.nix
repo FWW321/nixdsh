@@ -602,6 +602,7 @@ in
     renderSettings
     renderWrapper
     renderCompletion
+    upstreamSubcommands
     applyPlugins
     mkDsh
     ;
