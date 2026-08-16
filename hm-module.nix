@@ -31,6 +31,18 @@ let
     name = cfg.binName;
     subcommands = lib.attrNames allProfiles;
   };
+
+  # bash 补全:bash-completion 的 XDG_DATA_HOME 用户目录(~/.local/share/
+  # bash-completion/completions/<bin>)。xdg.dataFile 是 HM 声明式 link:
+  # face 移除/改名 → activation 自动删/换 link,store 旧的归 GC,零遗留。
+  # 只声明文件本身,不要求用户启用 programs.bash(文件在对的位置,任何
+  # bash-completion 消费方都能拾取)
+  bashCompletion = dshLib.renderCompletion {
+    name = cfg.binName;
+    subcommands = lib.attrNames allProfiles;
+    profiles = lib.attrNames finalProfiles;
+    upstream = dshLib.upstreamSubcommands cfg.package;
+  };
   finalProfiles = lib.mapAttrs
     (name: p:
       let inc = applied.perProfile.${name} or { extraPlugins = [ ]; extraPatches = [ ]; }; in
@@ -87,6 +99,9 @@ in
 
   config = lib.mkIf cfg.enable {
     home.packages = [ mainWrapper ];
+
+    xdg.dataFile."bash-completion/completions/${cfg.binName}".text =
+      bashCompletion;
 
     # unstable HM:dag 在 config.lib(lib 参数未扩展,lib.hm.dag 已移除)
     home.activation.dshProfiles =

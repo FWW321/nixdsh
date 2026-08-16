@@ -117,6 +117,12 @@ let
         cfg = fakeCfg;
         inherit pkgs;
       };
+      # bash 补全:分发名单 + 上游命令都在 $1 词表,--profile 值含 web
+      completionText = dshLib.renderCompletion {
+        subcommands = [ "tui" "headless" ];
+        profiles = [ "web" "tui" "headless" ];
+        upstream = [ "web" "plugin" ];
+      };
       # 保留名负例:profile/face 名撞上游子命令(plugin 语义 ≠ profile
       # boot)→ renderWrapper 求值期 throw。fake package 无 bin.js →
       # upstreamSubcommands 回落内置名单 {web,plugin};tryEval 须强制
@@ -150,6 +156,11 @@ let
       grep -qF -- '--profile "$_dsh_face"' ${dispatchWrapper}/bin/dsh
       ! grep -qF 'tui|web' ${dispatchWrapper}/bin/dsh
       ! grep -q '_dsh_face' ${plainWrapper}/bin/dsh
+      # 补全词表:子命令含 tui/headless/plugin,profile 词含 web
+      echo ${pkgs.lib.escapeShellArg completionText} > "$TMPDIR/dsh-completion"
+      grep -qF 'compgen -W "tui headless web plugin"' "$TMPDIR/dsh-completion"
+      grep -qF 'compgen -W "web tui headless plugin"' "$TMPDIR/dsh-completion"
+      grep -qF 'complete -F _dsh dsh' "$TMPDIR/dsh-completion"
       touch $out
     '');
 
