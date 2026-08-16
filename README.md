@@ -193,16 +193,29 @@ HM 的 `mkForce`:语义不可删除,但出现即设计缺口信号。
 自带树不建立在 dsh-base 上、必须自带全套运行时行,但 tui profile 的
 最终树里 base 行都在 —— 单包树只是层的来源,行归属哪个包无关紧要。
 
-**空载荷代价决定禁用态是否值得**(配置承载型内部仍有差异,源码实证):
-`llm-pi-ai` 空 providers = `directoryEntries()` 零注册,无可观测面 ——
-`providers` 默认 `{}` 即"默认启用·惰性",无需禁用态;`llm-deepseek` 空
-载荷 = `DEFAULT_MODELS` catalog(v4-flash/pro)无条件注册,无 key 即死
-UI 条目 —— 未声明禁用有实益。
+**三态语义统一,默认值承载意图**(零 per-plugin 特殊处理):配置承载型
+的 typed 选项一律 `null | {} | 配置attrs` ——
 
-配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
+| 值 | 语义 |
+|---|---|
+| `null` | 禁用(disable 行进所有 profile 用户层) |
+| `{}` | 显式启用·零配置(纯运行时配置留位:export / Web UI Models 页) |
+| 非空 attrs | 启用 + settings 命名空间段渲染 |
+
+插件间差异只允许出现在**默认值**,而默认值由空载荷代价选出(源码实证):
+`llm-pi-ai` 空 providers = `directoryEntries()` 零注册、无可观测面 →
+默认 `{}`(默认启用·惰性);`llm-deepseek` 空载荷 = `DEFAULT_MODELS`
+catalog(v4-flash/pro)无条件注册、无 key 即死 UI 条目 → 默认 `null`
+(默认禁用)。空载荷代价是选默认值的依据,**不是**豁免某插件三态语义的
+理由 —— 谁都能禁,谁都能显式启用;`providers` 升级为 `nullOr`
+(默认仍 `{}`,非破坏)即 pi-ai 的三态载体,`providers = null` × 非空
+载荷声明 → 求值期 fail-loud(同 skills × disable 先例)。
+
+ 配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
 启用必显式 —— 给配置(声明即启用)或显式 enable(为纯运行时配置留位)。
-落地状态:`mcpServers`/`skills`/`presets` 已是此语义;`webSearch` /
-`llmDeepseek` 等 typed 选项在路线图,现由层 2 + 层 3 组合表达
+落地状态:`mcpServers`/`skills`/`presets` 已是此语义;路线图:
+`webSearch` / `llmDeepseek` typed 选项(默认 null)、`providers` 升级
+nullOr(pi-ai 三态化,默认 {} 保持启用)。此前由层 2 + 层 3 组合表达
 (如 `inBoxPlugins."llm-deepseek".enable = false` 即"不要 deepseek
 路由"意图暂住层 3 的形态)。
 
