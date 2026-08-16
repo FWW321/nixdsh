@@ -394,11 +394,42 @@ web 服务 + provider 住宿主组合(有状态:provider 注册表/MCP 会话缓
 独立组合,profile patch 只作用宿主树,自建同名 preset 又被 shipped
 root first-root-wins 遮蔽,覆盖路线也堵死;preset 里的 tool-web 漏网
 照常注册,`web_search` 工具卡留在 UI、schema token 照吃(provider 行
-已禁,调用报 `WEB_PROVIDER_CONFIGURED_MISSING` 结构化错误 —— 这本身
+ 已禁,调用报 `WEB_PROVIDER_CONFIGURED_MISSING` 结构化错误 —— 这本身
 是上游"稳定注册"的正常设计,问题只在禁用意图没打全)。tui 同理
 (preset 接管)。headless 的 disable 全净(宿主行即唯一行)。根治需
 上游:preset 级配置化裁剪或 agent-presets 行级禁用(随 preset opt-out
 issue 一并提)。
+
+**已知限制:会话事件是封闭集,仓库外插件不能写自定义事件**(实测
+rc.6 中毒 + 修复全程)。官方 `web/deepseek-search-llm-request` 之所以
+能写,是它注册在 `dsh-session` 的 `KNOWN_SESSION_EVENT_TYPES` 封闭集
+里(session-persistence :1119 读端校验:`KNOWN.has(type) ||
+event.ignorable === true`);上游注释明说仓库外插件事件 by
+construction 不在列表,注册面 deferred。**写自定义事件 = 毒化会话
+日志**:读端 `SessionFormatUnsupportedError` 拒读整份日志(历史不可
+回放),且写毒的会话在列表/打开时反复触发。曾给我们两个 zhipu
+provider 加过审计事件(照官方 recordRequest 模式),实测毒化 —— 已
+删(包 commit a02ae5f/dc91b57),教训:**加事件只验证了写路径(官方
+包怎么写),没验证读回路径**;任何"日志追加"类功能必须先读一遍。
+
+会话日志手术手册(已实操,供复发时参考):
+
+- 格式:`session.jsonl.zstd` = **逐 append 批一个 zstd frame**(魔数
+  `28 B5 2F FD` 切分),解开后每行一个 JSON;聚合行
+  (`text-chunks`/`reasoning-chunks`/`tool-call-chunks`)由
+  `decodeStorageRecord` 展开为**多条 seq 连续事件** —— 验证脚本必须
+  展开聚合行,否则满屏假 gap
+- 两个约束:seq 全程 0 起连续(**裸丢事件行 = seq gap,读端拒绝**);
+  事件 type 须在已知集**或带 envelope 级 `ignorable: true`**
+- 正确修法:毒事件行改 `"ignorable": true`(type 原样保留,读端跳过
+  且 seq 不断)—— 不要丢行(第一次手术丢帧造成 seq gap),也不要
+  整文件重压(第二次手术错在 zstd 单 frame —— 上游是逐行流式追加,
+  整压成单 frame 读端报 "first frame is not exactly one header
+  line";受影响 frame 内的行重压回逐行 frame,未受影响 frame 原样
+  字节保留)
+- 服务读坏日志会 boot 崩溃循环(dsh-web 起不来,3080 拒连);日志
+  修好后 systemd 自动拉起,无需干预
+- 上游 issue 素材(第 4 条):会话事件注册面或公开 ignorable 写入口
 
 ## 入口
 
