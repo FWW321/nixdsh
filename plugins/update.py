@@ -165,9 +165,21 @@ def main() -> None:
             fields.append(("face", face))
         if patch := (manifest.get("dsh", {}).get("bundle", {}).get("patch")):
             fields.append(("bundlePatch", patch))
-        # peers 物化:peerDependencies 的包名列表(宿主 dsh 安装是 peer 的
-        # 唯一提供者,buildProfile 据此做回链 symlink)
-        if peers := list((manifest.get("peerDependencies") or {}).keys()):
+        # peers 物化:peerDependencies ∪ dependencies(宿主 dsh 安装是它们的
+        # 唯一提供者,buildProfile 据此做回链 symlink)。deps 并入是必须的:
+        # 预构建插件源码 tree 不带 node_modules,运行时 import 的依赖
+        # (如 @tonydua/dsh-web-search-exa 的 @deepseek-ai/schemastery)
+        # 须经回链解析 —— 实测漏链 = ERR_MODULE_NOT_FOUND 炸 boot
+        # (ESM 从插件真实路径向上找 node_modules,profile 级链接救不了)
+        peers = sorted(
+            set((manifest.get("peerDependencies") or {}).keys())
+            | {
+                k
+                for k in (manifest.get("dependencies") or {})
+                if k.startswith("@deepseek-ai/")
+            }
+        )
+        if peers:
             fields.append(("peers", json.dumps(peers)))
         if needs_build:
             fields += [("needsBuild", True), ("pnpmHash", pnpm_hash)]
