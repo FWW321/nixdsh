@@ -15,14 +15,17 @@ let
   dshLib = import ./lib.nix { inherit lib; };
   cfg = config.programs.dsh;
 
-  mainWrapper = dshLib.renderWrapper {
-    inherit cfg pkgs;
-    name = cfg.binName;
-  };
-
   # typed 插件层增量 + in-box 条目行 + 原始 profile 声明 + face 自动 profile
   # → 最终 profile
   applied = dshLib.applyPlugins { inherit cfg pkgs; };
+
+  # 主 wrapper 挂 face 子命令分发(dsh <face> → --profile <face>);名单来自
+  # face 自动生成结果,用户零声明。dsh-<name> wrapper 已固定绑定,不分发
+  mainWrapper = dshLib.renderWrapper {
+    inherit cfg pkgs;
+    name = cfg.binName;
+    faces = lib.attrNames applied.facePlugins;
+  };
   allProfiles = cfg.profiles // applied.facePlugins;
   finalProfiles = lib.mapAttrs
     (name: p:

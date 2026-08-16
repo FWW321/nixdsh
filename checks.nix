@@ -74,6 +74,49 @@ let
         };
       };
       assert' = cond: msg: pkgs.lib.assertMsg cond msg;
+      # dsh <face> 子命令分发:主 wrapper 脚本内容(build 期 grep);
+      # web 排除(上游原生 web 子命令已等价 boot profiles.web)
+      fakeCfg = {
+        settings = { };
+        telemetry = { mode = null; };
+        providers = { };
+        defaultModel = null;
+        environment = { };
+        dshHome = "/tmp/fake-dsh-home";
+        package = pkgs.hello;
+        defaultProfile = "base";
+        extraArgs = [ ];
+      };
+      dispatchWrapper = dshLib.renderWrapper {
+        cfg = fakeCfg;
+        inherit pkgs;
+        faces = [ "tui" "web" ];
+      };
+      plainWrapper = dshLib.renderWrapper {
+        cfg = fakeCfg;
+        inherit pkgs;
+      };
+      # 保留名负例:face "plugin" 与上游 pnpm 子命令冲突 → 求值期 throw。
+      # tryEval 须强制到 .facePlugins(attrset WHNF 不触发内部 seq 断言)
+      badPlugin = builtins.tryEval
+        (builtins.seq
+          (dshLib.applyPlugins {
+            inherit pkgs;
+            cfg = {
+              profiles = { };
+              plugins."terminal" = {
+                enable = true;
+                face = "plugin";
+                source = "@deepseek-ai/dsh-headless";
+                profiles = [ ];
+                settings = { };
+                patches = [ ];
+                patchId = null;
+              };
+              inBoxPlugins = { };
+            };
+          }).facePlugins
+          null);
       assertions = toString [
         (assert' (r.facePlugins ? web) "dsh-face-gen: in-box table must derive 'web' from null face")
         (assert' (r.facePlugins ? my-desktop) "dsh-face-gen: face=true must derive attr key name")
@@ -82,9 +125,18 @@ let
           "dsh-face-gen: perProfile must cover auto faces")
         (assert' (builtins.length r.perProfile.web.extraPlugins == 1)
           "dsh-face-gen: suppressed (false) plugin must distribute as function plugin")
+        (assert' (!badPlugin.success) "dsh-face-gen: face 'plugin' must be rejected at eval time")
       ];
     in
-    pkgs.runCommand "dsh-face-gen-check" { } (builtins.seq assertions "touch $out");
+    # seq 强制断言求值(任一失败 → 求值期 fail-loud);buildCommand grep
+    # 验证分发块渲染:tui 在/web 排除/空 faces 无块
+    pkgs.runCommand "dsh-face-gen-check" { } (builtins.seq assertions ''
+      grep -q 'tui)' ${dispatchWrapper}/bin/dsh
+      grep -qF -- '--profile "$_dsh_face"' ${dispatchWrapper}/bin/dsh
+      ! grep -qF 'tui|web' ${dispatchWrapper}/bin/dsh
+      ! grep -q '_dsh_face' ${plainWrapper}/bin/dsh
+      touch $out
+    '');
 
   # inBoxPlugins 双向渲染:disable/enable/config 三态行落进 bundle patch
   inBoxRows =

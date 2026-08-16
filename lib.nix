@@ -239,14 +239,20 @@ let
   # wrapper 渲染(TonyWu20 的 yq-merge 语义 + DSH_HOME):
   # - 声明 settings 每次启动 merge 进 settings.yaml:声明值覆盖同名键,本地其他键保留
   #   (dsh Web UI 会运行时改配置,yq merge 是唯一不与之打架的声明式方案)
+  # - face 子命令分发:dsh <face> ... → dsh --profile <face> ...(上游 CLI
+  #   子命令集封闭 {web,plugin},`dsh web` 即官方的 face-子命令样板,第三方
+  #   face 无入口,wrapper 层补同形态)。web 排除:上游原生子命令已等价
+  #   boot profiles.web;plugin 在 facePlugins 断言层直接拒绝
   # - profile 注入:调用无显式 --profile 且非 web/plugin 子命令(它们拒绝父级 --profile)时
   #   自动补 --profile <name>;fixedProfile 非 null 时强制绑定该 profile
+  #   (face 分发改写后 --profile 已显式存在,注入逻辑自然跳过)
   renderWrapper =
     {
       cfg,
       pkgs,
       name ? "dsh",
       fixedProfile ? null,
+      faces ? [ ],
     }:
     let
       effectiveProfile = if fixedProfile != null then fixedProfile else cfg.defaultProfile;
@@ -282,6 +288,20 @@ let
         (mapAttrsToList
           (n: v: "export ${n}=${escapeShellArg v}")
           cfg.environment);
+      # 只给主 wrapper(fixedProfile = null);dsh-<face> wrapper 已固定绑定,
+      # 二次分发无意义。仅拦 $1(与上游子命令同粒度),-- 之后的位置参数不碰
+      dispatchFaces = filter (f: f != "web") faces;
+      faceDispatch = optionalString (dispatchFaces != [ ]) ''
+        if [ $# -gt 0 ]; then
+          case "$1" in
+            ${concatStringsSep "|" dispatchFaces})
+              _dsh_face="$1"
+              shift
+              set -- --profile "$_dsh_face" "$@"
+              ;;
+          esac
+        fi
+      '';
       profilePrelude = optionalString (effectiveProfile != null) ''
         wants_profile=0
         is_subcommand=0
@@ -305,6 +325,7 @@ let
       export DSH_HOME="${cfg.dshHome}"
       ${envPrelude}
       ${settingsPrelude}
+      ${faceDispatch}
       ${profilePrelude}
       exec ${getExe cfg.package} ${argsStr} "$@"
     '';
@@ -367,6 +388,8 @@ let
           _dupAssert =
             if builtins.length faceNames != builtins.length (lib.unique faceNames) then
               throw "programs.dsh.plugins: duplicate face names (${concatStringsSep ", " faceNames})"
+            else if builtins.elem "plugin" faceNames then
+              throw "programs.dsh.plugins: face name 'plugin' is reserved (upstream dsh subcommand with different semantics; web is fine — upstream \`dsh web\` already aliases --profile web)"
             else if any (f: !validFace f) faceNames then
               throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and dsh-<face> wrapper name"
             else null;
