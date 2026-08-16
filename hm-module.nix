@@ -37,6 +37,7 @@ let
       profile = dshLib.mkProfile {
         inherit name;
         inherit (p) plugins userPatchesFile userPatches;
+        disabled = cfg.disabledPlugins;
       };
     })
     finalProfiles;

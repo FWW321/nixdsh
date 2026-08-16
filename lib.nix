@@ -91,8 +91,11 @@ let
       name,
       plugins,
       userPatchesFile ? null,
-      userPatches ? [ ],
-    }:
+       userPatches ? [ ],
+       # 追加为 disabled 行的 cordis 条目 id(选项 disabledPlugins;
+       # 放在 patch 层末尾,晚于插件 bundle patch 生效)
+       disabled ? [ ],
+     }:
     let
       classify =
         plugin:
@@ -113,6 +116,8 @@ let
     in
     assert unique; {
       inherit name userPatchesFile userPatches;
+      # disabled 行追加在用户 patch 之后(patch 顺序即叠加顺序,后行胜出)
+      patches = userPatches ++ (map (id: { inherit id; disabled = true; }) disabled);
       plugins = classified;
       # 层序 = in-box 名 + 有 patch 的 nix 插件名,保持用户声明顺序(dsh 按 bundle 顺序叠加)
       layers =
@@ -144,11 +149,12 @@ let
         mkdir -p "$out/node_modules/$(dirname ${escapeShellArg p.packageName})"
         ln -s ${escapeShellArg (toString p.packagePath)} "$out/node_modules/${escapeShellArg p.packageName}"
       '';
+      # 显式 userPatchesFile 是全权委托,不再追加 disabled 行
       patchContent =
         if profile.userPatchesFile != null then
           ''cp ${escapeShellArg (toString profile.userPatchesFile)} "$out/cordis.patch.yml"''
         else
-          ''printf '%s' ${escapeShellArg (builtins.toJSON profile.userPatches)} > "$out/cordis.patch.yml"'';
+          ''printf '%s' ${escapeShellArg (builtins.toJSON profile.patches)} > "$out/cordis.patch.yml"'';
     in
     pkgs.runCommand "dsh-profile-${profile.name}"
       {
@@ -356,7 +362,9 @@ let
       profileBundles = mapAttrs
         (name: p: buildProfile {
           inherit pkgs;
-          profile = mkProfile { inherit name; } // (withPlugins name p);
+          profile = mkProfile { inherit name; } // (withPlugins name p) // {
+            disabled = cfg.disabledPlugins;
+          };
         })
         cfg.profiles;
     in

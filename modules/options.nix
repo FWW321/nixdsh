@@ -348,6 +348,21 @@ in
       '';
     };
 
+    # 禁用插件(in-box 自带路由/条目):每个 profile 的 patch 层追加
+    # { id; disabled = true; } 行。典型用例:只用自建 provider 时禁掉
+    # in-box 的 llm-deepseek(模型选择器不再显示 deepseek)。
+    # disabled 是 cordis loader 行级原生语义(!!js 表达式亦可用,走 userPatches)
+    disabledPlugins = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "llm-deepseek" ];
+      description = ''
+        要禁用的 cordis 条目 id(dsh --dump-config 可查),如 in-box 的
+        llm-deepseek / web-search-deepseek。渲染为所有 profile 的
+        patch 行 disabled: true(loader 跳过该条目,不注册)。
+      '';
+    };
+
     environmentFiles = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
