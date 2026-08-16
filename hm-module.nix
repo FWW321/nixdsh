@@ -69,9 +69,9 @@ let
   # (声明名 Nix 拥有,物化覆盖创造模式迭代版 —— 声明即接管)。
   # ⚠ 能力行被 preset 层遮蔽的根因与 retiring 条件见 lib/preset.nix 注记
   presetArtifacts = lib.mapAttrs
-    (name: p: dshLib.buildPreset {
+    (name: src: dshLib.buildPreset {
       inherit pkgs;
-      source = p.source;
+      source = src;
       rows = applied.wfRows ++ applied.wsProviderRows ++ applied.wsSelectorRow;
     })
     (dshLib.validatePresets cfg.presets);
