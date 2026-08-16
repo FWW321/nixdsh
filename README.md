@@ -315,11 +315,11 @@ Plugin Inventory(loader 条目只读投影)会列出该插件"已启用",与表�
 卡无关。配置面:声明侧 settings 段照常渲染(yq merge 热改);运行时
 改值走 host settings scope API(命名空间可读写,`installSettingsSection`
 的作用),只是无专属表单 UI。动态表单需上游做(基建已有:
-`dsh-client-schema-form` 包存在但未用于此)—— 可提 issue;另注:
-peers 回链修复后预构建插件包源变化会改变 store 路径,activation
-指纹服务只盯 profile/settings 内容,不覆盖 store 路径变化 ——
-运行中的 web 服务不会自动重启,须手动 `systemctl --user restart
-dsh-web`(候选改进:activation 比对 bundle store 路径变化即重启)。
+`dsh-client-schema-form` 包存在但未用于此)—— 可提 issue。
+
+注:bundle store 路径变化**已被** dsh-web 服务指纹覆盖
+(`DSH_PROFILE_FINGERPRINT` = 各 bundle 的 store 路径串,路径变 →
+unit 变 → HM 自动重启服务;实测 peers 修复重建后一次拉起,无需手动)。
 
 **已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
 rc.6)。`webSearch = null` 禁三行(`web`/`web-search-deepseek`/`tool-web`
