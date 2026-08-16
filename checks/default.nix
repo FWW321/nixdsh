@@ -13,7 +13,7 @@ let
   fx = import ./fixtures.nix { inherit pkgs dshLib; };
 in
 {}
-// import ./profile.nix { inherit pkgs dshLib fx; }
-// import ./seam.nix { inherit pkgs dshLib fx; }
-// import ./mcp.nix { inherit pkgs dshLib fx; }
-// import ./sources.nix { inherit pkgs dshLib fx; }
+// (import ./profile.nix { inherit pkgs dshLib fx; })
+// (import ./seam.nix { inherit pkgs dshLib fx; })
+// (import ./mcp.nix { inherit pkgs dshLib fx; })
+// (import ./sources.nix { pkgs = pkgs; lib = pkgs.lib; inherit dshLib fx; })

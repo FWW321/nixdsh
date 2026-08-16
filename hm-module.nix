@@ -62,10 +62,19 @@ let
     })
     finalProfiles;
 
-  # agent 预设:纯文件目录物化到 .agent-presets/<name>(上游热发现,
-  # 免重启)。校验在 lib.validatePresets(eval 期 fail-loud);stamp 语义
-  # 同 profile(声明名 Nix 拥有,物化覆盖创造模式迭代版 —— 声明即接管)
-  presetSources = dshLib.validatePresets cfg.presets;
+  # agent 预设:build 期重放能力行组(单一事实源 applied;行组增删改 →
+  # 产物路径变 → stamp 重物化,删除自动清理)+ 剥 tui marker(所有权归
+  # 声明方,ensurePackagedPresets 视无 marker 目录为 conflict 永不碰)。
+  # 校验在 lib.validatePresets(eval 期 fail-loud);stamp 语义同 profile
+  # (声明名 Nix 拥有,物化覆盖创造模式迭代版 —— 声明即接管)。
+  # ⚠ 能力行被 preset 层遮蔽的根因与 retiring 条件见 lib/preset.nix 注记
+  presetArtifacts = lib.mapAttrs
+    (name: p: dshLib.buildPreset {
+      inherit pkgs;
+      source = p.source;
+      rows = applied.wfRows ++ applied.wsProviderRows ++ applied.wsSelectorRow;
+    })
+    (dshLib.validatePresets cfg.presets);
   # skills:validateSkills 校验 + 相对目标名(文件 → <名>.md / 目录 → <名>)
   skillSources = dshLib.validateSkills cfg.skills;
 
@@ -132,23 +141,24 @@ in
         done
 
         # agent 预设物化(热发现,免重启)+ 同语义孤儿清理。无 stamp 的
-        # 目录是 TUI 创造模式/手写的,不碰
-        _pkeep="${lib.concatStringsSep " " (lib.attrNames presetSources)}"
+        # 目录是 TUI 创造模式/手写的,不碰。物化的是 buildPreset 产物
+        # (能力行已重放,marker 已剥),stamp = 产物路径
+        _pkeep="${lib.concatStringsSep " " (lib.attrNames presetArtifacts)}"
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList
-          (name: src: ''
+          (name: artifact: ''
             _pdir="${cfg.dshHome}/.agent-presets/${name}"
             _pstamp="$_pdir/.dsh-nix-stamp"
-            if [ -f "$_pstamp" ] && [ "$(cat "$_pstamp")" = "${toString src}" ]; then
+            if [ -f "$_pstamp" ] && [ "$(cat "$_pstamp")" = "${toString artifact}" ]; then
               :
             else
               rm -rf "$_pdir"
               mkdir -p "$_pdir"
-              cp -a "${toString src}/." "$_pdir/"
+              cp -a "${toString artifact}/." "$_pdir/"
               chmod -R u+w "$_pdir"
-              printf '%s' "${toString src}" > "$_pstamp"
+              printf '%s' "${toString artifact}" > "$_pstamp"
             fi
           '')
-          presetSources)}
+          presetArtifacts)}
         for _dir in "${cfg.dshHome}"/.agent-presets/*; do
           [ -e "$_dir" ] || continue
           [ -f "$_dir/.dsh-nix-stamp" ] || continue

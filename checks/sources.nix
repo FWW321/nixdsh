@@ -1,6 +1,6 @@
 # 源校验与 settings 域:providers 合并语义、presets/skills 源校验 +
 # 依赖冲突负例
-{ pkgs, dshLib, fx }:
+{ pkgs, lib, dshLib, fx }:
 
 let
   inherit (fx) applyWith;
@@ -86,6 +86,59 @@ in
         (builtins.seq (pkgs.lib.assertMsg (good ? ok)
           "dsh-presets: valid preset directory must pass")
           "touch $out"));
+
+  # preset 物化管线:能力行重放(yq 按 id 改写 config 键,行不在 preset
+  # 里无操作)、tui marker 剥离、其余文件原样、行组变更 → 产物路径变
+  # (删除自动清理的 derivation 语义)
+  dsh-preset-replay =
+    let
+      # 夹具:仿 preset 目录(agent.cordis.yml 含 tool-web fetch:false)+
+      # tui 所有权 marker
+      srcBase = pkgs.runCommand "preset-replay-src" { }
+        ''
+          mkdir -p $out
+          cat > $out/agent.cordis.yml <<'EOF'
+          - id: tool-bash
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: false
+              searchTimeoutMs: 60000
+          EOF
+          cat > $out/.dsh-tui-managed.json <<'EOF'
+          {"owner":"@deepseek-harness-tui/dsh-tui","preset":"x","revision":"v3"}
+          EOF
+        '';
+      replayed = dshLib.buildPreset {
+        inherit pkgs;
+        source = srcBase;
+        rows = [
+          { id = "tool-web"; config = { fetch = true; }; }
+          { id = "nonexistent"; config = { x = 1; }; } # 行不在 preset → 无操作
+        ];
+      };
+      plain = dshLib.buildPreset {
+        inherit pkgs;
+        source = srcBase;
+        rows = [ ];
+      };
+      fetchVal = builtins.readFile (pkgs.runCommand "preset-fetch-probe" { } ''
+        ${pkgs.yq-go}/bin/yq '.[] | select(.id == "tool-web") | .config.fetch' ${replayed}/agent.cordis.yml > $out
+      '');
+      # 行组不同 → 产物路径必不同(store 内容寻址);空行组 = 纯拷贝变体
+      pathsDiffer = toString replayed != toString plain;
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-preset-replay-check" { } (builtins.deepSeq ([
+      (assert' (lib.removeSuffix "\n" fetchVal == "true")
+        "preset-replay: capability row must rewrite tool-web config.fetch to true")
+      (assert' (!builtins.pathExists "${replayed}/.dsh-tui-managed.json")
+        "preset-replay: tui ownership marker must be stripped (ensurePackagedPresets would otherwise staged-replace the materialized copy)")
+      (assert' (builtins.pathExists "${replayed}/agent.cordis.yml")
+        "preset-replay: other preset files must survive verbatim")
+      (assert' pathsDiffer
+        "preset-replay: differing rows must yield differing store paths (stamp re-materialization / deletion cleanup depends on it)")
+    ]) "touch $out");
 
   # skills 源校验:平铺 .md / 目录束(SKILL.md)双形态 + 双负例 +
   # 依赖冲突负例(声明 skills 而 disable 发现插件 → eval throw)

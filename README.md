@@ -378,7 +378,9 @@ Plugin Inventory(loader 条目只读投影)会列出该插件"已启用",与表�
 unit 变 → HM 自动重启服务;实测 peers 修复重建后一次拉起,无需手动)。
 
 **已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
-rc.6)。`webSearch = null` 禁三行(`web`/`web-search-deepseek`/`tool-web`
+rc.6;**对称面:开保险丝的 patch 行同样不可达** —— 解法见「能力行
+重放」节,fetch:true 经 preset 物化穿透)。`webSearch = null` 禁三行
+(`web`/`web-search-deepseek`/`tool-web`
 —— 三个独立行,"不要搜索能力"同时覆盖 provider 与工具,工具禁用不
 依赖 provider)。
 
@@ -488,6 +490,51 @@ profile:未变不动,孤儿自扫)。声明名 Nix 拥有 —— 物化覆盖 TU
 无需任何声明,插件装了就在;只导入**你自己创造/手写**的预设(无
 managed marker)。与 shipped 预设撞 id 的自建预设会被 root 优先级
 遮蔽 —— 改名。
+
+### 能力行重放(preset 层穿透,含 retiring 注记)
+
+⚠ **本小节机制是对上游缺陷的声明式补丁,上游修缝后整体退役**
+(条件:能力保险丝进 settings 热缝或宿主 `web` 行 config —— 已列
+上游 issue 批次)。退役 = 物化回退纯拷贝,行为见 lib/preset.nix 注记。
+
+背景(实测 rc.6):能力行组的宿主层 patch 对 web/tui 会话**无效**
+——dsh-web-app bundle 把 tool-web 等模型面工具整行禁用("The Web
+surface disables them here and lets each session mount a preset
+instead"),dsh-tui patch 同构;会话工具的真实来源是每会话挂载的
+preset(standard:250 / liangshen:388 写死 `fetch: false`),行解析
+序 agent → preset → global,宿主行够不着。工具插件的 schema 默认
+本就是 `search: true, fetch: true`(dsh-tool-web index.js:747)——
+保险丝是 preset 显式关的,不是插件默认。
+
+机制:`presets.<name>.source` 的物化升级为 derivation
+(`lib/preset.nix buildPreset`)——build 期把 applyPlugins 渲染的
+能力行组(wfRows / wsProviderRows / wsSelectorRow,单一事实源)
+yq 按 id 改写进 `agent.cordis.yml`,并剥 `.dsh-tui-managed.json`
+(tui 的 ensurePackagedPresets 视无 marker 目录为 conflict 永不
+staged 替换 —— 所有权归声明方)。
+
+- **零边际**:行组来自能力选项(webFetch/webSearch/将来任意),
+  自动穿透所有声明的 preset;配置面无任何 per-preset 改写行
+- **删除自动清理**:行增/删/改 → 产物 store 路径变 → stamp 不匹配
+  → 重物化;删整个声明 → 既有孤儿清理兜底
+- **行不在 preset 里 → 无操作**(minimal 无 tool-web 行是身份语义,
+  不 insert);disabled/insert 形态行不重放(全局树语义)
+- **上游跟随**:flake bump → source 包变 → 重物化重放,与 profile
+  的 base+userPatches 完全同构
+
+用法(fork shipped preset 须换名避开遮蔽 + 设默认;tui 托管 preset
+声明同名即接管):
+
+```nix
+presets.fww.source = "${pkgs.dsh}/config/agent-presets/standard"; # 换名
+settings."agent-presets".default = "fww";
+presets.liangshen.source = "${pkgs.dshPlugins.dsh-tui}/presets/liangshen";
+webFetch = "zhipu";   # 自动重放 fetch:true 进两个 preset
+```
+
+残余边界(架构性质,非方案缺陷):会话内手动选非 default 的 shipped
+preset(standard/cordis)拿到未改写版 —— "a preset IS a
+composition",preset 是终态组合非可深 merge 声明层;根治在上游。
 
 **方式 A:进 registry(常用插件,nixvim 式零样板)**
 

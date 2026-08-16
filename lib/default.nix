@@ -39,6 +39,7 @@ let
     inherit (apply) applyPlugins;
     inherit (inbox) buildProfile mkProfile;
   };
+  preset = import ./preset.nix { inherit lib; };
 in
 {
   # 公共 API(与拆分前 lib.nix 的导出面一致)
@@ -67,5 +68,8 @@ in
     ;
   inherit (mkDshLayer)
     mkDsh
+    ;
+  inherit (preset)
+    buildPreset
     ;
 }
