@@ -568,7 +568,7 @@ let
           { }
           (attrNames cfg.plugins);
      in
-     builtins.seq _faceExclusivityAssert (builtins.seq _defaultPresetAssert) {
+     builtins.seq _faceExclusivityAssert (builtins.seq _defaultPresetAssert {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜过)
       inherit inBoxPatches;
       # MCP 服务器行(同样全局,追加在 in-box 行之后)
@@ -608,7 +608,7 @@ let
                 [ (defaultPresetRows.${profileName}) ]);
           })
           allProfileNames);
-    };
+    });
 in
 {
   inherit applyPlugins;
