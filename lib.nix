@@ -307,6 +307,26 @@ let
         else p.source)
       presets;
 
+  # skill 源校验(dsh-skill-filesystem 实测):单文件 .md 或目录束(目录
+  # 须含 SKILL.md)。返回 { name → target 相对路径 }(文件 → <名>.md,
+  # 目录 → <名>/),供 activation 物化;非法源 throw
+  validateSkills = skills:
+    mapAttrs
+      (name: s:
+        let
+          src = toString s.source;
+          isFile = builtins.pathType src == "directory";
+          dirHasSkillMd = builtins.pathExists "${src}/SKILL.md";
+        in
+        if isFile then
+          if !dirHasSkillMd then
+            throw "programs.dsh.skills.${name}.source: directory ${src} has no SKILL.md (a directory skill bundles <name>/SKILL.md + optional resources)"
+          else "${name}"
+        else
+          if lib.hasSuffix ".md" src then "${name}.md"
+          else throw "programs.dsh.skills.${name}.source: file ${src} must be a .md skill (or a directory containing SKILL.md)")
+      skills;
+
   # wrapper 渲染(TonyWu20 的 yq-merge 语义 + DSH_HOME):
   # - 声明 settings 每次启动 merge 进 settings.yaml:声明值覆盖同名键,本地其他键保留
   #   (dsh Web UI 会运行时改配置,yq merge 是唯一不与之打架的声明式方案)
@@ -543,10 +563,44 @@ let
             // (lib.optionalAttrs (p.enable != null) { disabled = !p.enable; })
             // (lib.optionalAttrs (p.config != { }) { inherit (p) config; }))
           cfg.inBoxPlugins;
+      # MCP 服务器行(rc.5 dsh-mcp-client 实测):插件不在默认树,每 server
+      # 一行;config 判别联合由 transport 定形。null/空省略;settings 逃生口
+      # 最后并(reconnect 等未 typed 字段)
+      mcpPatches =
+        mapAttrsToList
+          (name: m:
+            let
+              common = { inherit (m) transport; serverName = name; }
+                // (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                  toolCallTimeoutMs = m.toolCallTimeoutMs or null;
+                  failOnStartupError = m.failOnStartupError or null;
+                })
+                // (m.settings or { });
+              body =
+                if m.transport == "stdio" then
+                  lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                    inherit (m) args env;
+                    command = m.command or null;
+                    cwd = m.cwd or null;
+                  }
+                else
+                  lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                    url = m.url or null;
+                    headers = m.headers or { };
+                  };
+            in
+            {
+              id = "mcp-${name}";
+              name = "@deepseek-ai/dsh-mcp-client";
+              config = common // body;
+            })
+          (cfg.mcpServers or { });
     in
     {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜出)
       inherit inBoxPatches;
+      # MCP 服务器行(同样全局,追加在 in-box 行之后)
+      mcpPatches = mcpPatches;
       # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
       inherit facePlugins;
       # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
@@ -560,7 +614,8 @@ let
             extraPatches =
               (concatMap (c: c.patches)
                 (filter (c: builtins.elem profileName c.profiles) contributions))
-              ++ inBoxPatches;
+              ++ inBoxPatches
+              ++ mcpPatches;
           })
           allProfileNames);
     };
@@ -615,6 +670,7 @@ in
     renderCompletion
     upstreamSubcommands
     validatePresets
+    validateSkills
     applyPlugins
     mkDsh
     ;

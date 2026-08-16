@@ -261,6 +261,78 @@ in
           "dsh-presets: valid preset directory must pass")
           "touch $out"));
 
+  # MCP 服务器行渲染:判别联合(stdio/streamable-http)、null 省略、
+  # settings 逃生口并入、serverName = attr 名
+  dsh-mcp-render =
+    let
+      rows = (dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          profiles = { default = { }; };
+          plugins = { };
+          inBoxPlugins = { };
+          mcpServers = {
+            filesystem = {
+              transport = "stdio";
+              command = "/run/current-system/sw/bin/npx";
+              args = [ "-y" "@modelcontextprotocol/server-filesystem" "/home" ];
+              env = { };
+              cwd = null;
+              url = null;
+              headers = { };
+              toolCallTimeoutMs = null;
+              failOnStartupError = false;
+              settings = { reconnect.maxAttempts = 5; };
+            };
+            remote = {
+              transport = "streamable-http";
+              url = "https://mcp.example.com/mcp";
+              headers = { Authorization = "Bearer x"; };
+              command = null;
+              args = [ ];
+              env = { };
+              cwd = null;
+              toolCallTimeoutMs = 30000;
+              failOnStartupError = false;
+              settings = { };
+            };
+          };
+        };
+      }).mcpPatches;
+      byId = builtins.listToAttrs (map (r: { name = r.id; value = r; }) rows);
+      fs = byId."mcp-filesystem".config;
+      rm = byId."mcp-remote".config;
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-mcp-render-check" { } (builtins.seq ([
+      (assert' (byId ? "mcp-filesystem" && byId ? "mcp-remote") "dsh-mcp-render: one row per server must render")
+      (assert' (fs.serverName == "filesystem" && fs.command != null) "dsh-mcp-render: stdio server must carry serverName+command")
+      (assert' (!fs ? cwd && !fs ? toolCallTimeoutMs) "dsh-mcp-render: null fields must be omitted")
+      (assert' (fs.reconnect.maxAttempts == 5) "dsh-mcp-render: settings escape hatch must merge into config")
+      (assert' (rm ? url && rm ? headers && rm.toolCallTimeoutMs == 30000) "dsh-mcp-render: streamable-http must carry url/headers")
+      (assert' (!rm ? command && !rm ? args) "dsh-mcp-render: http server must not carry stdio fields")
+    ]) "touch $out");
+
+  # skills 源校验:平铺 .md / 目录束(SKILL.md)双形态 + 双负例
+  dsh-skills =
+    let
+      ok = dshLib.validateSkills {
+        flat.source = ./fixtures/skill-flat.md;
+        bundle.source = ./fixtures/skill-bundle;
+      };
+      badDir = builtins.tryEval (builtins.deepSeq
+        (dshLib.validateSkills { x.source = ./fixtures; }) null);
+      badExt = builtins.tryEval (builtins.deepSeq
+        (dshLib.validateSkills { x.source = ./checks.nix; }) null);
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-skills-check" { } (builtins.seq ([
+      (assert' (ok.flat == "flat.md") "dsh-skills: flat .md must map to <name>.md")
+      (assert' (ok.bundle == "bundle") "dsh-skills: directory must map to <name>/")
+      (assert' (!badDir.success) "dsh-skills: directory without SKILL.md must throw")
+      (assert' (!badExt.success) "dsh-skills: non-.md file must throw")
+    ]) "touch $out");
+
   # renderSettings 合并语义:typed providers 逐条覆盖 freeform 同名条目、
   # null/空字段省略、freeform 命名空间其他键与其他 provider 条目保留。
   # 断言在求值期生效:任一不成立 → check 求值失败(fail-loud 无需构建)

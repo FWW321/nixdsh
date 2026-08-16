@@ -66,6 +66,8 @@ let
   # 免重启)。校验在 lib.validatePresets(eval 期 fail-loud);stamp 语义
   # 同 profile(声明名 Nix 拥有,物化覆盖创造模式迭代版 —— 声明即接管)
   presetSources = dshLib.validatePresets cfg.presets;
+  # skills:validateSkills 校验 + 相对目标名(文件 → <名>.md / 目录 → <名>)
+  skillSources = dshLib.validateSkills cfg.skills;
 
   # activation:物化不可变 bundle 为可写副本(dsh 每次 boot 改写 profile 根 cordis.yml)
   activateProfile = name: bundle:
@@ -156,6 +158,39 @@ in
             *) rm -rf "$_dir" ;;
           esac
         done
+
+        # skills 物化($DSH_HOME/skills,上游 watch 热发现免重启)。
+        # stamp 键 = attr 名,存于 skills/.dsh-nix-stamps/(不污染发现根:
+        # 扫描跳过 . 开头目录,frontmatter 只认 <名>.md/<名>/SKILL.md);
+        # 孤儿清理:stamp 在而声明已删 → 删物化物与 stamp。不碰用户手放文件
+        mkdir -p "${cfg.dshHome}/skills/.dsh-nix-stamps"
+        _skeep="${lib.concatStringsSep " " (lib.attrNames skillSources)}"
+        ${lib.concatStringsSep "\n" (lib.mapAttrsToList
+          (name: rel: ''
+            _starget="${cfg.dshHome}/skills/${rel}"
+            _sstamp="${cfg.dshHome}/skills/.dsh-nix-stamps/${name}"
+            if [ -f "$_sstamp" ] && [ "$(cat "$_sstamp")" = "${toString cfg.skills.${name}.source}" ]; then
+              :
+            else
+              rm -rf "$_starget"
+              cp -a "${toString cfg.skills.${name}.source}" "$_starget"
+              chmod -R u+w "$_starget" 2>/dev/null || true
+              printf '%s' "${toString cfg.skills.${name}.source}" > "$_sstamp"
+            fi
+          '')
+          skillSources)}
+        for _stamp in "${cfg.dshHome}"/skills/.dsh-nix-stamps/*; do
+          [ -e "$_stamp" ] || continue
+          _name="$(basename "$_stamp")"
+          case " $_skeep " in
+            *" $_name "*) ;;
+            *)
+              rm -rf "${cfg.dshHome}/skills/$_name" "${cfg.dshHome}/skills/$_name.md"
+              rm -f "$_stamp"
+              ;;
+          esac
+        done
+        rmdir "${cfg.dshHome}/skills/.dsh-nix-stamps" 2>/dev/null || true
       '');
 
     systemd.user.services.dsh-web = lib.mkIf cfg.web.enable {

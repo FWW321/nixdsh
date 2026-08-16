@@ -464,6 +464,114 @@ in
       '';
     };
 
+    # MCP 服务器(rc.5 dsh-mcp-client 实测):插件不在默认树,每 server
+    # 一行 cordis 行(name @deepseek-ai/dsh-mcp-client),工具暴露为
+    # mcp__<serverName>__<tool>。行渲染进所有 profile → 变化走 bundle
+    # 指纹重启(web 服务自动跟进)。
+    # 注意:config 落盘 $DSH_HOME/profiles/<n>/cordis.patch.yml —— 勿在
+    # env/headers 里放明文密钥(皮下进程 env 直接来自此文件),密钥走
+    # wrapper environment + 环境变量引用不可行时用上游 Web UI 运行时配置
+    mcpServers = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          transport = lib.mkOption {
+            type = lib.types.enum [ "stdio" "streamable-http" ];
+            default = "stdio";
+            description = "stdio(本地命令)或 streamable-http(远程端点)";
+          };
+          command = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "stdio:子进程命令(如 nix store 路径里的 mcp-server)";
+          };
+          args = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            description = "stdio:子进程参数";
+          };
+          env = lib.mkOption {
+            type = lib.types.attrsOf lib.types.str;
+            default = { };
+            description = "stdio:子进程环境变量(注意落盘明文,勿放密钥)";
+          };
+          cwd = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "stdio:子进程工作目录";
+          };
+          url = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "streamable-http:端点 URL";
+          };
+          headers = lib.mkOption {
+            type = lib.types.attrsOf lib.types.str;
+            default = { };
+            description = "streamable-http:请求头(注意落盘明文,勿放密钥)";
+          };
+          toolCallTimeoutMs = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            description = "工具调用超时;null 省略(用上游默认)";
+          };
+          failOnStartupError = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "启动连接失败时让整树失败(false = 跳过该 server 继续启动)";
+          };
+          settings = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+            description = "逃生口:未 typed 化字段(如 reconnect 策略)直接并进该行 config";
+          };
+        };
+      });
+      default = { };
+      example = lib.literalExpression ''
+        {
+          filesystem = {
+            command = "npx";
+            args = [ "-y" "@modelcontextprotocol/server-filesystem" "/home" ];
+          };
+        }
+      '';
+      description = ''
+        MCP 服务器声明:每条渲染一行 cordis 插件行到所有 profile
+        (id = mcp-\<name\>,serverName = attr 名)。schema 实测于
+        dsh-mcp-client(判别联合:stdio / streamable-http)。
+      '';
+    };
+
+    # skills(dsh-skill-filesystem 实测):Markdown + YAML frontmatter,
+    # 平铺 <名>.md 或目录束 <名>/SKILL.md。发现根含 $DSH_HOME/skills
+    # 与跨 agent 标准目录 ~/.agents/skills;watch 热发现免重启。
+    # 此处物化到 $DSH_HOME/skills(跨 agent 共享的技能由各工具自行管理
+    # ~/.agents/skills,不属 dsh 模块管辖)
+    skills = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          source = lib.mkOption {
+            type = lib.types.path;
+            description = ''
+              skill 文件:单文件 .md(path)或目录(path,须含 SKILL.md,
+              可带辅助资源文件)。attr 名 = skill 名。
+            '';
+          };
+        };
+      });
+      default = { };
+      example = lib.literalExpression ''
+        {
+          deploy-check.source = ./skills/deploy-check.md;
+          pdf-inspector.source = ./skills/pdf-inspector;  # 目录束
+        }
+      '';
+      description = ''
+        skill 声明:activation 物化到 \$DSH_HOME/skills/\<名\>[.md]
+        (stamp 语义同 presets),上游 watch 热发现免重启。
+      '';
+    };
+
     environmentFiles = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
