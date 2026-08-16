@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+# dsh-plugins-update — vimPlugins update.py 的个人规模 transpose(Python 重写)
+# 读 plugins/names.txt(owner/repo [subpath])→ GitHub API 解析版本
+# (tag 优先,HEAD 回退)→ nix prefetch → 读 package.json(packageName +
+# dsh.bundle.patch + needsBuild 探测 + pnpmDeps hash 发现)
+# → 写 plugins/generated.nix(overlay.nix 消费为 pkgs.dshPlugins.<packageName>)
+#
+# 幂等:同 rev 重跑不产生 diff。网络:GitHub API + codeload tarball。
+# 用法:update.py [nixdsh-repo-root](缺省取 git toplevel / NIXDSH_ROOT)
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+FAKE_HASH = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+
+def repo_root() -> Path:
+    if len(sys.argv) > 1:
+        return Path(sys.argv[1]).resolve()
+    if root := os.environ.get("NIXDSH_ROOT"):
+        return Path(root)
+    out = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+    )
+    if out.returncode == 0:
+        return Path(out.stdout.strip())
+    sys.exit("usage: update.py [nixdsh-repo-root]  (or run inside the repo / set NIXDSH_ROOT)")
+
+
+ROOT = repo_root()
+NAMES = ROOT / "plugins" / "names.txt"
+GENERATED = ROOT / "plugins" / "generated.nix"
+
+_token_file = Path("/run/secrets/github_token")
+_HEADERS = (
+    {"Authorization": f"Bearer {_token_file.read_text().strip()}"}
+    if _token_file.is_file()
+    else {}
+)
+
+
+def api(path: str):
+    req = urllib.request.Request(f"https://api.github.com/{path}", headers=_HEADERS)
+    with urllib.request.urlopen(req) as resp:
+        return json.load(resp)
+
+
+def resolve_version(owner: str, repo: str) -> tuple[str, str]:
+    """release tag > 最新 tag > 默认分支 HEAD。失败即抛,绝不产出空 rev。"""
+    try:
+        tag = api(f"repos/{owner}/{repo}/releases/latest")["tag_name"]
+        return tag, tag
+    except (urllib.error.HTTPError, KeyError):
+        pass
+    try:
+        tag = api(f"repos/{owner}/{repo}/tags")[0]["name"]
+        sha = api(f"repos/{owner}/{repo}/git/ref/tags/{tag}")["object"]["sha"]
+        return sha, tag
+    except (urllib.error.HTTPError, IndexError, KeyError):
+        pass
+    branch = api(f"repos/{owner}/{repo}")["default_branch"]
+    sha = api(f"repos/{owner}/{repo}/commits/{branch}")["sha"]
+    import datetime
+
+    return sha, f"0-unstable-{datetime.date.today().isoformat()}"
+
+
+def prefetch(owner: str, repo: str, rev: str) -> tuple[str, str]:
+    """codeload tarball → (storePath, narHash),fetchFromGitHub 兼容。"""
+    out = subprocess.run(
+        [
+            "nix", "store", "prefetch-file", "--unpack", "--json",
+            f"https://github.com/{owner}/{repo}/archive/{rev}.tar.gz",
+        ],
+        check=True, capture_output=True, text=True,
+    )
+    data = json.loads(out.stdout)
+    return data["storePath"], data["hash"]
+
+
+def probe_pnpm_hash(src: str) -> str:
+    """fetchPnpmDeps hash 发现:fakeHash 构建预期失败,从错误信息取 got:。"""
+    rev = json.loads((ROOT / "flake.lock").read_text())["nodes"]["nixpkgs"]["locked"]["rev"]
+    url = f"https://github.com/NixOS/nixpkgs/archive/{rev}.tar.gz"
+    expr = (
+        f'(import (builtins.fetchTarball "{url}") {{}}).fetchPnpmDeps.override '
+        f'{{ pnpm = (import (builtins.fetchTarball "{url}") {{}}).pnpm_11; }} {{ '
+        f'pname = "probe"; version = "1"; src = {src}; '
+        f"fetcherVersion = 4; hash = \"{FAKE_HASH}\"; }}"
+    )
+    out = subprocess.run(
+        ["nix", "build", "--no-link", "--impure", "--expr", expr],
+        capture_output=True, text=True,  # 预期失败,不 check
+    )
+    if m := re.search(r"got:\s+(sha256-\S+)", out.stderr + out.stdout):
+        return m.group(1)
+    sys.exit(f"pnpmDeps hash discovery failed:\n{out.stderr[-800:]}")
+
+
+def nix_str(s: str) -> str:
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def main() -> None:
+    entries = []
+    for raw in NAMES.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        owner, repo = parts[0].split("/", 1)
+        subpath = parts[1] if len(parts) > 1 else ""
+
+        rev, version = resolve_version(owner, repo)
+        print(f"→ {owner}/{repo}: {version} ({rev[:12]})")
+
+        src, hash_ = prefetch(owner, repo, rev)
+        pkg_dir = Path(src) / subpath if subpath else Path(src)
+        pkg_json = pkg_dir / "package.json"
+        if not pkg_json.is_file():
+            sys.exit(f"  no package.json at {pkg_json}")
+        manifest = json.loads(pkg_json.read_text())
+
+        # needsBuild 探测:主入口 export target 在 git 源码缺失
+        # → 上游提交的 lib 过期/不全,derivation 需构建(tsc)+ 打包运行时 node_modules
+        dot = (manifest.get("exports") or {}).get(".", {})
+        main_target = (
+            dot.get("import") or dot.get("default")
+            if isinstance(dot, dict) else dot
+        ) or manifest.get("main") or ""
+        main_target = main_target.lstrip("./") if isinstance(main_target, str) else ""
+        needs_build = bool(main_target) and not (pkg_dir / main_target).is_file()
+        pnpm_hash = ""
+        if needs_build:
+            print(f"  main target {main_target} missing in source → build needed")
+            pnpm_hash = probe_pnpm_hash(src)
+            print(f"  pnpmDeps: {pnpm_hash[:19]}…")
+
+        fields = [
+            ("owner", owner), ("repo", repo), ("rev", rev),
+            ("version", version), ("hash", hash_),
+        ]
+        if subpath:
+            fields.append(("subpath", subpath))
+        if patch := (manifest.get("dsh", {}).get("bundle", {}).get("patch")):
+            fields.append(("bundlePatch", patch))
+        # peers 物化:peerDependencies 的包名列表(宿主 dsh 安装是 peer 的
+        # 唯一提供者,buildProfile 据此做回链 symlink)
+        if peers := list((manifest.get("peerDependencies") or {}).keys()):
+            fields.append(("peers", json.dumps(peers)))
+        if needs_build:
+            fields += [("needsBuild", True), ("pnpmHash", pnpm_hash)]
+
+        def nix_val(v):
+            if v is True:
+                return "true"
+            if v.startswith("["):
+                # JSON 数组 → Nix 字符串列表(逐元素转义,非字面量直传)
+                items = json.loads(v)
+                return "[ " + " ".join(nix_str(i) for i in items) + " ]"
+            return nix_str(v)
+
+        attrs = " ".join(f"{k} = {nix_val(v)};" for k, v in fields)
+        entries.append(f"  {nix_str(manifest['name'])} = {{ {attrs} }};\n")
+
+    body = "".join(entries)
+    GENERATED.write_text(
+        "# 由 update.py 生成,勿手改(nix run github:FWW321/nixdsh#dsh-plugins-update)\n"
+        + ("{ }\n" if not entries else "{\n" + body + "}\n")
+    )
+    print(f"✓ {GENERATED}")
+
+
+if __name__ == "__main__":
+    main()

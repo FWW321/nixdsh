@@ -32,6 +32,7 @@ let
     mapAttrsToList
     nameValuePair
     optionalString
+    unique
     ;
 
   # dsh 安装自带的 bundle(profile 里按名字引用,dsh 运行时从自身安装解析)
@@ -75,12 +76,17 @@ let
         if manifest != null then (((manifest.dsh or { }).bundle or { }).patch or null)
         else (passthruMeta.dshBundlePatch or null);
       resolvedPatchPath = if patchPath != null then patchPath else declaredPatch;
+      # peerDependencies 包名(derivation 走 passthru;路径走 package.json)
+      resolvedPeers =
+        if manifest != null then (builtins.attrNames (manifest.peerDependencies or { }))
+        else (passthruMeta.dshPeers or [ ]);
     in
     {
       packageName = checkedPackageName;
       # store 化:本地路径进 store,保证 profile 工件引用的不可变性
       packagePath = if builtins.isPath path then builtins.path { inherit path; } else path;
       patchPath = resolvedPatchPath;
+      peers = resolvedPeers;
       # 有 cordis patch 的插件才是 profile layer(进 dsh.profile.bundles 数组)
       isLayer = resolvedPatchPath != null;
     };
@@ -124,7 +130,13 @@ let
     };
 
   buildProfile =
-    { pkgs, profile }:
+    {
+      pkgs,
+      profile,
+      # 宿主 dsh 安装(peer 包唯一提供者);第三方插件 peerDependencies
+      # 声明的包从这里 symlink 进 profile node_modules(pnpm 生态 peer 布局)
+      hostDsh ? null,
+    }:
     let
       nixPlugins = map (e: e.plugin) (filter (e: e.kind == "nix") profile.plugins);
       layers = filter (l: l != null) profile.layers;
@@ -140,6 +152,21 @@ let
         mkdir -p "$out/node_modules/$(dirname ${escapeShellArg p.packageName})"
         ln -s ${escapeShellArg (toString p.packagePath)} "$out/node_modules/${escapeShellArg p.packageName}"
       '';
+      # peer 回链:插件 peers ∩ 宿主 dsh 安装内的包;宿主 node_modules 根 =
+      # lib/node_modules/@deepseek-ai/dsh/node_modules(npm hoisted 布局)
+      peerNames =
+        lib.unique (concatMap (p: p.peers) nixPlugins);
+      hostModules = "${toString hostDsh}/lib/node_modules/@deepseek-ai/dsh/node_modules";
+      linkPeer = name: ''
+        if [ -d "${hostModules}/${escapeShellArg name}" ]; then
+          mkdir -p "$out/node_modules/$(dirname ${escapeShellArg name})"
+          ln -sfn "${hostModules}/${escapeShellArg name}" "$out/node_modules/${escapeShellArg name}"
+        else
+          echo "warning: peer '${name}' not found in host dsh install; skipping" >&2
+        fi
+      '';
+      peerLinks = optionalString (hostDsh != null && peerNames != [ ])
+        (concatStringsSep "\n" (map linkPeer peerNames));
       patchContent =
         if profile.userPatchesFile != null then
           ''cp ${escapeShellArg (toString profile.userPatchesFile)} "$out/cordis.patch.yml"''
@@ -157,6 +184,7 @@ let
         printf '[]\n' > "$out/cordis.yml"
         ${patchContent}
         ${concatStringsSep "\n" (map linkPlugin nixPlugins)}
+        ${peerLinks}
       '';
 
   # settings 渲染:freeform settings 为底,typed core(telemetry.mode)后合并覆盖
@@ -316,6 +344,7 @@ let
       profileBundles = mapAttrs
         (name: p: buildProfile {
           inherit pkgs;
+          hostDsh = cfg.package;
           profile = mkProfile { inherit name; } // (withPlugins name p);
         })
         cfg.profiles;

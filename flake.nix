@@ -18,10 +18,13 @@
           dsh = pkgs.callPackage ./package.nix { };
         });
 
-      # pkgs.dsh + pkgs.dshPlugins.<name>(names.txt + update.sh 生成)
+      # pkgs.dsh + pkgs.dshPlugins.<name>(names.txt + update.py 生成;
+      # hostDsh 注入使插件 derivation 内可回链 peer 包 → 宿主安装)
       overlays.default = final: _prev: {
         dsh = final.callPackage ./package.nix { };
-        dshPlugins = final.callPackage ./plugins/overlay.nix { };
+        dshPlugins = final.callPackage ./plugins/overlay.nix {
+          hostDsh = final.dsh;
+        };
       };
 
       homeManagerModules = rec {
@@ -47,7 +50,7 @@
         in
         import ./checks.nix { inherit pkgs; });
 
-      # dshPlugins 集合更新器(vimPlugins update.py 个人规模 transpose)
+      # dshPlugins 集合更新器(vimPlugins update.py 个人规模 transpose,Python)
       apps = forEachSystem (system:
         let
           pkgs = import nixpkgs { inherit system; overlays = [ self.overlays.default ]; };
@@ -55,11 +58,9 @@
         {
           dsh-plugins-update = {
             type = "app";
-            program = "${pkgs.writeShellApplication {
-              name = "dsh-plugins-update";
-              runtimeInputs = with pkgs; [ curl git jq nix ];
-              text = builtins.readFile ./plugins/update.sh;
-            }}/bin/dsh-plugins-update";
+            program = "${pkgs.writers.writePython3 "dsh-plugins-update" {
+              libraries = [ ];
+            } (builtins.readFile ./plugins/update.py)}";
           };
         });
 
