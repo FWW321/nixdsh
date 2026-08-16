@@ -449,6 +449,51 @@ provider 加过审计事件(照官方 recordRequest 模式),实测毒化 —— 
 原生子命令)。不再生成 per-profile wrapper(`dsh-<face>` 等)—— 子命令
 分发等价,独立入口只是 $PATH 噪音,短命令需求由 shell alias 承担。
 
+## face 树独占插件通道(强一致性教义)
+
+**交互树(face tree)只能由 face 插件生成**;手写 `profiles.<name>` 是
+非交互命名组合的通道(base + 功能插件 + patches),两者不重叠。
+
+为什么收口(此前是软一致性 —— 双通道各自合法,靠撞车 assert 兜底,
+留下三个漏洞):
+
+- **per-插件选项恒有锚**:`plugins.dsh-tui.defaultPreset` 挂在交互
+  插件上,树由它生成,选项永不失焦(face 改名经推导链自动跟随)
+- **树生命周期严格绑定插件**:enable/disable 即树的存在/消失,
+  无"无主 tui 树"形态
+- **一棵树恰一个 owner**:stamp/物化/孤儿清理语义无歧义
+
+变体交互树不需要手写通道 —— 插件通道全覆盖:
+
+```nix
+# 第二棵 web 树:同 bundle 不同名,零手写 profile
+plugins."web-dev" = {
+  source = "@deepseek-ai/dsh-web-app";
+  face = "web-dev";                # → dsh web-dev 子命令
+};
+```
+
+检测与边界(eval 期 throw):手写 profile 的 plugins 里嵌 face bundle
+(in-box 字符串命中 web-app/headless,或 derivation 源带
+`passthru.dshFace`)。路径源无元数据不可检;`userPatchesFile` 是全权
+委托同样检测不到 —— 这两处是文档纪律:交互 bundle 一律走插件通道。
+
+### 默认 preset(per-face + 全局兜底)
+
+```nix
+plugins.dsh-tui.defaultPreset = "liangshen";  # tui 树默认(改名自动跟随)
+programs.dsh.defaultPreset = "fww";           # 其余树兜底
+```
+
+消费者是树上 `agent-presets` roster 行的 `default` 键(不是插件 ——
+插件只播种 preset)。**settings 协调**(核心约束):行 config 只是
+settings 的 base,settings 用户层恒胜 —— 任一 per-face 值生效时全局
+自动不进 settings、下沉为各树行 patch 的兜底值,免遮蔽;只设全局时
+走 settings 热缝(免重启)。负例全 fail-loud:非 face 插件设值 /
+freeform `settings."agent-presets"` 与 typed 同设。preset id 存在性
+不校验(手写 preset 是运行时状态,eval 期不可见;roster 自有
+UnknownPresetError)。
+
 ## 服务与 CLI:无共享守护进程(实测 rc.5 依赖图)
 
 **每个 face boot 一棵完整独立的 cordis 树**,不是"后端守护 + 瘦前端"。

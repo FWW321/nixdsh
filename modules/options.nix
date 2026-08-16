@@ -54,6 +54,20 @@ in
       '';
     };
 
+    defaultPreset = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "fww";
+      description = ''
+        全局默认 agent preset(未显式设置的 face 树用它兜底)。
+        消费者是树上 agent-presets roster 行的 default 键 —— 但行
+        config 是 settings 的 base,settings 用户层恒胜:任一
+        plugins.\<name\>.defaultPreset 生效时全局不进 settings,
+        下沉为各树行 patch 的兜底值(自动协调,免遮蔽)。与 freeform
+        settings."agent-presets" 同设 → 求值期 throw。
+      '';
+    };
+
     settings = lib.mkOption {
       type = lib.types.attrs;
       default = { };
@@ -589,6 +603,19 @@ in
               ensurePackagedPresets 播种原件),不做能力行重放 ——
               与 face = false 的"压制自动推导"同构。与
               excludedPresets 同设非空 → 求值期 throw(矛盾声明)。
+            '';
+          };
+          defaultPreset = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "liangshen";
+            description = ''
+              本 face 树的默认 agent preset(渲染为树上 agent-presets
+              行的 default 重述;face 改名自动跟随)。仅交互插件可设
+              (非 face 插件无树 → throw)。未设的树回落全局
+              programs.dsh.defaultPreset。preset id 存在性不校验:
+              手写 preset 在 \$DSH_HOME 是运行时状态,eval 期不可见;
+              运行时 roster 自有 UnknownPresetError。
             '';
           };
           patchId = lib.mkOption {

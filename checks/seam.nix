@@ -360,4 +360,72 @@ in
       ''grep -q 'fetchProvider: zhipu' "$TMPDIR/dump.log"''
     ];
   };
+
+  # 默认 preset:per-face 行渲染(进树 userPatches)+ 全局兜底回落 +
+  # settings 协调(per-face 生效 → 全局不进 settings)+ 强一致性负例
+  # (手写 profile 嵌 face bundle / 非 face 插件设值 / freeform 冲突)
+  dsh-default-preset =
+    let
+      mk = cfg: applyWith cfg;
+      # per-face 值 + 全局兜底:tui 树用 per-值,web 树回落全局
+      both = mk {
+        defaultPreset = "fww";
+        plugins = {
+          "dsh-tui" = {
+            enable = true; face = null; source = null; profiles = [ ];
+            settings = { }; patches = [ ]; patchId = null;
+            defaultPreset = "liangshen";
+          };
+          "web-app" = {
+            enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
+            profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+          };
+        };
+      };
+      tuiRows = both.perProfile.tui.extraPatches;
+      webRows = both.perProfile.web.extraPatches;
+      rowOf = rows: builtins.head (pkgs.lib.filter (r: r.id == "agent-presets") rows);
+      # 只设全局 → 不出行(settings 热缝),协调标志 false
+      globalOnly = mk {
+        defaultPreset = "fww";
+        plugins = { };
+      };
+      # 负例三连
+      tryThrow = f: msg:
+        let res = builtins.tryEval (builtins.deepSeq (f { }) null);
+        in pkgs.lib.assertMsg (!res.success) msg;
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-default-preset-check" { } (builtins.deepSeq ([
+      (assert' ((rowOf tuiRows).config.default == "liangshen")
+        "default-preset: per-plugin value must render into the face tree's roster row")
+      (assert' ((rowOf webRows).config.default == "fww")
+        "default-preset: unset face tree must fall back to the global value")
+      (assert' (globalOnly.defaultPresetRows == { } && !globalOnly.hasFaceDefaultPreset)
+        "default-preset: global-only must stay on the settings seam (no rows, no coordination flag)")
+      (assert' (dshLib.renderSettings {
+        settings = { }; telemetry = { mode = null; }; providers = { }; defaultModel = null;
+        defaultPreset = "fww"; hasFaceDefaultPreset = false;
+      } ? "agent-presets")
+        "default-preset: global-only must render into settings")
+      (assert' (!(dshLib.renderSettings {
+        settings = { }; telemetry = { mode = null; }; providers = { }; defaultModel = null;
+        defaultPreset = "fww"; hasFaceDefaultPreset = true;
+      } ? "agent-presets"))
+        "default-preset: per-face active must suppress the global settings entry (shadowing)")
+      (tryThrow (mk {
+        profiles."my-web".plugins = [ "@deepseek-ai/dsh-base" "@deepseek-ai/dsh-web-app" ];
+      }) "default-preset: hand-written profile embedding a face bundle must throw (plugin channel exclusivity)")
+      (tryThrow (mk {
+        plugins.rotator = {
+          enable = true; face = false; source = "./fixture-rotator";
+          profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+          defaultPreset = "x";
+        };
+      }) "default-preset: defaultPreset on a non-face plugin must throw")
+      (tryThrow (mk {
+        defaultPreset = "fww";
+        settings."agent-presets".default = "manual";
+      }) "default-preset: freeform settings.\"agent-presets\" + typed defaultPreset must throw")
+    ]) "touch $out");
 }

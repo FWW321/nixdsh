@@ -98,9 +98,22 @@ let
       # webSearch/llmDeepseek 不随 inherit:renderSettings 缺省 null,
       # stub cfg(无该键)与真实 cfg(默认 null)等价;显式 attrs 时模块
       # 系统保证键存在,inherit (cfg) 反而会炸 stub 调用方
+      # 默认 preset 协调参数来自 applyPlugins(per-face 生效时全局
+      # 不进 settings);stub cfg 或缺省键时 or 回落
+      rsArgs = {
+        inherit (cfg) settings telemetry providers defaultModel;
+        webSearch = cfg.webSearch or null;
+        webSearchProviders = cfg.webSearchProviders or { };
+        llmDeepseek = cfg.llmDeepseek or null;
+        webFetch = cfg.webFetch or null;
+        webFetchProviders = cfg.webFetchProviders or { };
+        defaultPreset = cfg.defaultPreset or null;
+        hasFaceDefaultPreset = _applied.hasFaceDefaultPreset;
+      };
+      _applied = applyPlugins { inherit cfg pkgs; };
       settingsJSON =
-        if renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; webSearchProviders = cfg.webSearchProviders or { }; llmDeepseek = cfg.llmDeepseek or null; webFetch = cfg.webFetch or null; webFetchProviders = cfg.webFetchProviders or { }; } == { } then null
-        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; webSearchProviders = cfg.webSearchProviders or { }; llmDeepseek = cfg.llmDeepseek or null; webFetch = cfg.webFetch or null; webFetchProviders = cfg.webFetchProviders or { }; });
+        if renderSettings rsArgs == { } then null
+        else builtins.toJSON (renderSettings rsArgs);
       settingsPrelude = optionalString (settingsJSON != null) ''
         dsh_home="''${DSH_HOME:-$HOME/.dsh}"
 

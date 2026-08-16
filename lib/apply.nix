@@ -190,7 +190,89 @@ let
              enabled;
         in
         builtins.seq _dupAssert (builtins.seq _usageAssert gen);
+      # ── 强一致性:face 树独占插件通道 ──────────────────────────────
+      # 手写 profile 嵌 face bundle(交互插件)→ throw。软一致性的三个
+      # 漏洞(face=false 压制/face 改名/手写树绕开推导)全部源于双通道
+      # 都能建交互树;收口后 per-插件选项(defaultPreset)恒有锚,face
+      # 改名自动跟随,树生命周期严格绑定插件。
+      # 检测:in-box 字符串命中 inBoxFaces(web-app/headless)/ derivation
+      # 源带 passthru.dshFace(registry 收录时人审)。路径源无元数据,
+      # 不可检 —— 文档纪律:交互 bundle 走插件通道。
+      # 手写 profiles 的存在本身合法(非交互命名组合:base+功能插件+
+      # patches);userPatchesFile 是全权委托,检测不到,同属文档纪律。
+      _faceExclusivityAssert =
+        let
+          isFaceSource = s:
+            builtins.isString s && inBoxFaces ? ${s}
+            || lib.isDerivation s && (s.passthru or { }).dshFace or null != null;
+          offenders =
+            concatMap
+              (pname:
+                let p = cfg.profiles.${pname}; in
+                map
+                  (s: { profile = pname; source = s; })
+                  (filter isFaceSource (p.plugins or [ ])))
+              (attrNames cfg.profiles);
+          fmt = o: "${o.profile} ← ${if builtins.isString o.source then o.source else toString o.source}";
+        in
+        if offenders != [ ] then
+          throw "programs.dsh: face bundles in hand-written profiles (${concatStringsSep "; " (map fmt offenders)}) — interactive trees come exclusively from the plugin channel (plugins.<name>.enable auto-generates the face profile); hand-written profiles are for non-interactive named compositions"
+        else null;
       allProfileNames = (attrNames cfg.profiles) ++ (attrNames facePlugins);
+
+      # ── 默认 preset(per-face 值 + 全局兜底,行 patch 形态)──────────
+      # 消费者是树上的 agent-presets roster 行,不是插件 —— 但值的
+      # 声明点挂交互插件(defaultPreset 经 faceName 找树,改名自动跟随)。
+      # 非 face 插件设值 → 无树可渲染 → throw(强一致性的对偶面)。
+      # settings 协调:行 config 是 settings 的 base,settings 用户层
+      # 恒胜 → 任一 per-face 值生效时全局不进 settings(否则遮蔽全部
+      # 行),改下沉为各树行 patch 的兜底值。
+      globalDefaultPreset = cfg.defaultPreset or null;
+      _defaultPresetAssert =
+        let
+          noTree = filter
+            (name:
+              (cfg.plugins.${name}.defaultPreset or null) != null
+              && faceOf name cfg.plugins.${name} == null)
+            (attrNames (lib.filterAttrs (_: p: p.enable) cfg.plugins));
+          freeformClash =
+            (cfg.settings or { }) ? "agent-presets"
+            && ((cfg.defaultPreset or null) != null
+              || any (name: (cfg.plugins.${name}.defaultPreset or null) != null)
+                (attrNames (lib.filterAttrs (_: p: p.enable) cfg.plugins)));
+        in
+        if noTree != [ ] then
+          throw "programs.dsh.plugins.${builtins.head noTree}: defaultPreset set on a non-face plugin (no interactive tree to render into — face trees come exclusively from face plugins; global defaultPreset covers the rest)"
+        else if freeformClash then
+          throw "programs.dsh: settings.\"agent-presets\" freeform declaration conflicts with defaultPreset/plugins.<name>.defaultPreset — the settings user layer would shadow the row patches; drop the freeform section or the typed option"
+        else null;
+      # per-插件值 → 树名(经 faceName 推导,与 faceProfiles 生成同链)
+      faceDefaultPresetRows =
+        let
+          faceNameOf = name: p:
+            let f = faceOf name p; in
+            if f == true then lib.removePrefix "dsh-" name else f;
+          fromPlugins = lib.flatten (mapAttrsToList
+            (name: p:
+              let v = p.defaultPreset or null; in
+              if p.enable && v != null then [{ tree = faceNameOf name p; value = v; }] else [ ])
+            cfg.plugins);
+        in
+        listToAttrs (map (e: nameValuePair e.tree e.value) fromPlugins);
+      hasFaceDefaultPreset = faceDefaultPresetRows != { };
+      # 最终行集:per-树值,缺省回落全局(仅自动 face 树有 roster 行;
+      # 手写 profile/headless 无行 → 行 patch warn-skip 无害,不渲染)
+      defaultPresetRows =
+        if !hasFaceDefaultPreset then { }
+        else
+          mapAttrs
+            (tree: _:
+              { id = "agent-presets"; config.default = faceDefaultPresetRows.${tree} or globalDefaultPreset; })
+            facePlugins;
+      # 只设全局 → settings 热缝(renderSettings 消费);设了 per-face
+      # → 全局不进 settings(hasFaceDefaultPreset 协调),树行兜底已含
+      effectiveGlobalPreset =
+        if hasFaceDefaultPreset then null else globalDefaultPreset;
       targetsFor = p:
         if p.profiles == [ ] then allProfileNames
         else filter (n: builtins.elem n allProfileNames) p.profiles;
@@ -485,8 +567,8 @@ let
               if r.success then acc // (filterExcluded name p (scanSrc r.value)) else acc)
           { }
           (attrNames cfg.plugins);
-    in
-    {
+     in
+     builtins.seq _faceExclusivityAssert (builtins.seq _defaultPresetAssert) {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜过)
       inherit inBoxPatches;
       # MCP 服务器行(同样全局,追加在 in-box 行之后)
@@ -499,6 +581,10 @@ let
       inherit facePlugins;
       # 插件源自动发现的 preset(显式声明合流在消费侧,显式胜)
       inherit discoveredPresets;
+      # 默认 preset:per-face 行集(键 = 树名)+ 协调标志/全局值(renderSettings
+      # 消费:per-face 生效时全局不进 settings,防 settings 用户层遮蔽行)
+      inherit defaultPresetRows hasFaceDefaultPreset;
+      effectiveGlobalPreset = effectiveGlobalPreset;
       # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
       # 覆盖显式 profile 与自动 face 两类)
       perProfile = listToAttrs
@@ -517,7 +603,9 @@ let
               ++ wsProviderRows
               ++ wsSelectorRow
               ++ wfRows
-              ++ mcpPatches;
+              ++ mcpPatches
+              ++ (lib.optionals (defaultPresetRows ? ${profileName})
+                [ (defaultPresetRows.${profileName}) ]);
           })
           allProfileNames);
     };
