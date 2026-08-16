@@ -220,16 +220,19 @@ nullOr(pi-ai 三态化,默认 {} 保持启用)。此前由层 2 + 层 3 组合�
 路由"意图暂住层 3 的形态)。
 
 **已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
-rc.6)。web-app 的 bundle patch 把宿主树 tool-web 禁掉移入 preset;
-shipped preset standard/code/cordis 的 `agent.cordis.yml` 各自带一份
-`tool-web`(minimal 无)。preset 是 CLI 包内只读独立组合,profile patch
-只作用宿主树;自建同名 preset 被 shipped root first-root-wins 遮蔽,
-覆盖路线也堵死。后果:`webSearch = null` 在 web face 禁掉 provider
-(`web`/`web-search-deepseek` 行,patch 有效),但 preset 的 tool-web
-按"稳定注册"原则照常注册 —— `web_search` 工具卡留在 UI、schema token
-照吃,调用报 `WEB_PROVIDER_UNAVAILABLE`。tui/headless 的 tool-web 是
-宿主树行,disable 全净。根治需上游:preset 级配置化裁剪或 agent-presets
-行级禁用(随 preset opt-out issue 一并提)。
+rc.6)。`webSearch = null` 禁三行(`web`/`web-search-deepseek`/`tool-web`
+—— 三个独立行,"不要搜索能力"同时覆盖 provider 与工具,工具禁用不
+依赖 provider)。web face 上 tool-web 存在两份:宿主树行已被 web-app
+的 bundle patch 禁掉(我们的 disable 行打上是 no-op,无冲突);shipped
+preset(standard/code/cordis)的 `agent.cordis.yml` 各自带一份
+`tool-web`(minimal 无)—— preset 是 CLI 包内只读独立组合,profile
+patch 只作用宿主树,自建同名 preset 又被 shipped root first-root-wins
+遮蔽,覆盖路线也堵死。后果:**"禁工具"意图在 web face 部分丢失** ——
+preset 里的 tool-web 漏网照常注册,`web_search` 工具卡留在 UI、schema
+token 照吃(provider 行已禁,调用报 `WEB_PROVIDER_UNAVAILABLE` 结构化
+错误 —— 这本身是上游"稳定注册"的正常设计,问题只在禁用意图没打全)。
+tui/headless 的 tool-web 是宿主树行,disable 全净。根治需上游:preset
+级配置化裁剪或 agent-presets 行级禁用(随 preset opt-out issue 一并提)。
 
 ## 入口
 
