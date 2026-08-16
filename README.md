@@ -146,6 +146,19 @@ nixdsh/
 | **配置承载型**(value-shaped) | 无配置 → 功能为零或必败。配置 = 声明段/环境变量/credentials 服务,**住址不限** | `mcp-client`(零 server = 零工具)、`skill-filesystem`(空目录 = 空目录)、`web-search-deepseek`(每次搜索必败 `WEB_PROVIDER_CREDENTIAL_MISSING`,严格模式无降级)、`llm-deepseek`(每次请求必败 `MISSING_CREDENTIAL`) |
 | **裸用型**(switch-shaped) | 零配置即完整工作 | `tool-bash`、`tool-fs`、`tool-todo`、`timer` |
 
+**包的"在场"有三种形态,启用路径各不同**(实测 rc.6;dsh-mcp-client
+查证:CLI runtime node_modules 有包,base/tui/web 三树零行引用,tui
+profile 的 package.json 也不含它):
+
+| 形态 | 例子 | 在场方式 | 启用路径 |
+|---|---|---|---|
+| 树行自带 | `llm-deepseek`、`web-search-deepseek` | base/face 树里有行 | 行已在(默认启用);禁用出 disable 行 |
+| **装而未挂**(shipped but unrouted) | `dsh-mcp-client` | 随 CLI runtime 发布,任何树**无行** —— 已装但沉睡,boot 零工具 | insert 行(我们的 `mcpServers` 渲染;loader 从 CLI 自身安装解析包,profile node_modules 无须有它);无需也无法 disable(无行可翻,卸载 = 删声明) |
+| 完全外部 | `@tonydua/dsh-web-search-exa` | 不随 CLI,不在任何树 | insert 行 **+ 包源进 profile**(nixdsh registry/显式 source);这是它与 mcp-client 的关键差别 |
+
+配置承载判据对三种形态照常适用("装而未挂"的 mcp-client 零 server =
+零 UI/prompt 占用,默认沉睡即正确姿态)。
+
 - **凭据也是配置**:shell export、Web UI Models 页运行时存储、settings
   段,一律算。"检测到环境变量就启用"**不在 eval 期做**(impure eval,
   破坏可重现);在 nix 侧声明凭据来源(secretFile/env wrapper)的动作
