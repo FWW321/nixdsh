@@ -163,6 +163,13 @@ HM 的 `mkForce`:语义不可删除,但出现即设计缺口信号。
 
 ### 显式原则与落地状态
 
+**作用域 = 组合树里无需用户声明就存在的行**(不只 dsh-base):face 树
+内部行同样在内 —— `enable dsh-tui` 是对 UI 的显式声明,但它传递带入
+的行(如树里的 `llm-deepseek`)仍未经行级声明,与 dsh-base 行同权适用
+判据。社区插件**本体**不在作用域:`enable = true` 才进树,入口显式由
+模块系统结构性保证,分类无事可做(其配置随同一声明块下发,way B 的
+`plugins.<name>.settings` 即"声明即启用"同款)。
+
 配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
 启用必显式 —— 给配置(声明即启用)或显式 enable(为纯运行时配置留位)。
 落地状态:`mcpServers`/`skills`/`presets` 已是此语义;`webSearch` /
