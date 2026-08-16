@@ -307,7 +307,13 @@ let
     let
       enabled = filter (p: p.enable) (attrValues cfg.plugins);
       # 名字→源:缺省 registry(不在 registry 且未显式给 source 时,mkPlugin
-      # 端 passthru 缺 packageName 会 throw —— 提前给友好错误)
+      # 端 passthru 缺 packageName 会 throw —— 提前给友好错误)。
+      # face 插件跳过:它不进分发,源直接取自声明(p.source 或键名映射的
+      # in-box bundle 名,如 headless → @deepseek-ai/dsh-headless)
+      faceSourceOf = name: p:
+        if p.source != null then p.source
+        else if inBoxFaces ? "@deepseek-ai/dsh-${name}" then "@deepseek-ai/dsh-${name}"
+        else throw "programs.dsh.plugins.${name}: face plugin requires an explicit source (or registry entry with face metadata)";
       sourceOf = name: p:
         if p.source != null then p.source
         else if pkgs ? dshPlugins && pkgs.dshPlugins ? ${name} then pkgs.dshPlugins.${name}
@@ -353,14 +359,12 @@ let
             (name: p:
               let fname = faceName name p; in
               lib.nameValuePair fname (
-                if p.source == null then
-                  throw "programs.dsh.plugins.${name}: face plugin requires an explicit source (or registry entry with face metadata)"
-                else if p.profiles != [ ] then
+                if p.profiles != [ ] then
                   throw "programs.dsh.plugins.${name}: face plugin cannot also list target profiles (faces are mutually exclusive trees)"
                 else if builtins.elem fname (attrNames cfg.profiles) then
                   throw "programs.dsh: face '${fname}' conflicts with explicitly declared profiles.${fname}"
                 else {
-                  plugins = [ "@deepseek-ai/dsh-base" p.source ];
+                  plugins = [ "@deepseek-ai/dsh-base" (faceSourceOf name p) ];
                   userPatchesFile = null;
                   userPatches = [ ];
                 }

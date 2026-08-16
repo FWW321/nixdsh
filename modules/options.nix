@@ -290,12 +290,13 @@ in
             default = null;
             example = true;
             description = ''
-              交互面声明,通常无需设置(元数据推导覆盖 registry 与 in-box)。
-              true = face 名取本 attr 键;字符串 = 显式命名(dsh web 子命令
-              硬编码 boot 名为 "web" 的 profile — in-box web-app 已由表
-              推导,勿改);false = 压制推导。生成
+              交互面声明,通常无需设置:in-box 键名自动映射
+              (web-app→web,headless→headless),registry 插件由收录时的
+              face= 标记推导。
+              true = face 名取本 attr 键;字符串 = 显式命名;false = 压制
+              推导(当功能插件用)。生成
               profiles.\<face\>.plugins = [ "@deepseek-ai/dsh-base" source ],
-              必须给 source。与显式 profiles.\<face\> 声明互斥。
+              与显式 profiles.\<face\> 声明互斥。
             '';
           };
           patchId = lib.mkOption {
