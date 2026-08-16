@@ -51,14 +51,14 @@ TMP=$(mktemp -d)
 trap 'rm -rf "${TMP}"' EXIT
 
 first=1
-emit() { # 追加一条 entry 到 ${TMP}/body
-  if [ "${first}" -eq 1 ]; then first=0; else printf ',\n' >>"${TMP}/body"; fi
+emit() { # 追加一条 entry 到 ${TMP}/body(Nix attrset 各条独立,无需分隔符)
+  first=0
   # 注:\" 不能内嵌在 "${:+}" 的嵌套引号里(bash 引号匹配在参数展开内失效),先拼片段
   sub=""
   [ -n "$7" ] && sub=" subpath = \"$7\"; "
   pat=""
   [ -n "$8" ] && pat=" bundlePatch = \"$8\"; "
-  printf '  "%s" = { owner = "%s"; repo = "%s"; rev = "%s"; version = "%s"; hash = "%s";%s%s };' \
+  printf '  "%s" = { owner = "%s"; repo = "%s"; rev = "%s"; version = "%s"; hash = "%s";%s%s };\n' \
     "$1" "$2" "$3" "$4" "$5" "$6" "$sub" "$pat" >>"${TMP}/body"
 }
 
