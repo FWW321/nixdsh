@@ -413,14 +413,15 @@ let
       # 轮换安全(secret 文件更新即生效);改动物化副本 patch 文件(用户
       # 目录,可 0600),store 工件永不含密钥。secret 文件缺失 → fail-loud
       # 退出,不静默带占位符启动。
-      # 占位符清单 = mcpPatches 渲染行文本回收(单一事实源,防与渲染链漂移)
+      # 占位符清单 = mcpPatches 渲染行文本回收(单一事实源,防与渲染链
+      # 漂移;insert 包裹后占位符在嵌套 config 里,扫整行 JSON)
       secretPrelude =
         let
           mcpRows = (applyPlugins { inherit cfg pkgs; }).mcpPatches;
           placeholders = lib.flatten
             (map
               (row:
-                let m = builtins.match ".*(@dsh-secret:[^\"]*@).*" (builtins.toJSON row.config);
+                let m = builtins.match ".*(@dsh-secret:[^\"]*@).*" (builtins.toJSON row);
                 in if m == null then [ ] else m)
               mcpRows);
         in
@@ -593,6 +594,20 @@ let
             else if any (f: !validFace f) faceNames then
               throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and the dsh <face> subcommand name"
             else null;
+          # 依赖冲突:skills/presets 的发现插件在 base 树默认启用,显式
+          # disable 会让物化文件无人消费 —— 静默失效比报错更糟,eval 期
+          # fail-loud。(MCP 插件随 insert 行自带,无此冲突;presets 的
+          # roster 行只在 tui/web 树存在,headless 本就无 preset 语义,
+          # 属上游 per-face 行为而非冲突)
+          _usageAssert =
+            let
+              inbox = id: (cfg.inBoxPlugins or { }).${id} or { enable = null; };
+            in
+            if (cfg.skills or { }) != { } && inbox "skill-filesystem".enable == false then
+              throw "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider"
+            else if (cfg.presets or { }) != { } && inbox "agent-presets".enable == false then
+              throw "programs.dsh: presets are declared but inBoxPlugins.agent-presets.enable = false — the preset roster is disabled; remove the presets or re-enable the roster"
+            else null;
           gen = lib.mapAttrs'
             (name: p:
               let fname = faceName name p; in
@@ -609,7 +624,7 @@ let
               ))
             enabled;
         in
-        builtins.seq _dupAssert gen;
+        builtins.seq _dupAssert (builtins.seq _usageAssert gen);
       allProfileNames = (attrNames cfg.profiles) ++ (attrNames facePlugins);
       targetsFor = p:
         if p.profiles == [ ] then allProfileNames
@@ -638,9 +653,15 @@ let
             // (lib.optionalAttrs (p.config != { }) { inherit (p) config; }))
           cfg.inBoxPlugins;
       # MCP 服务器行(rc.5 dsh-mcp-client 实测):插件不在默认树,每 server
-      # 一行;config 判别联合由 transport 定形。null/空省略;settings 逃生口
-      # 最后并(reconnect 等未 typed 字段)。env/headers 值支持 secretFile
-      # 形态 → 占位符渲染(见 renderSecretVal),refs 收集给 wrapper 注入
+      # 一个条目,包裹成 insert 行 —— cordis patch applier 对组合树里不
+      # 存在的 id 只 warn+skip(实测 cordis-plugin-include:`patch: entry
+      # not found`,7 行全丢、/mcp 空屏),新条目必须走 insert 通道
+      # (data.push)。config 判别联合由 transport 定形;null/空省略;
+      # settings 逃生口最后并。env/headers 值支持 secretFile 形态 →
+      # 占位符渲染(见 renderSecretVal),refs 收集给 wrapper 注入。
+      # 插件随行:设置 mcpServers 即插入 @deepseek-ai/dsh-mcp-client,
+      # 无法经 inBoxPlugins 关闭(id 不在树上,disable 行同样 not-found
+      # 跳过)—— 不装就删 mcpServers 条目
       mcpSecret =
         let
           renderServer = name: m:
@@ -691,7 +712,8 @@ let
             renderedServers;
         in
         {
-          rows = attrValues (mapAttrs (_: w: w.row) withSecrets);
+          rows = map (row: { insert = [ row ]; })
+            (attrValues (mapAttrs (_: w: w.row) withSecrets));
           refs = lib.unique (concatMap (w: w.refs) (attrValues withSecrets));
         };
       mcpPatches = mcpSecret.rows;

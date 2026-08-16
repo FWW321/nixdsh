@@ -315,10 +315,13 @@ in
           };
         };
       }).mcpPatches;
-      byId = builtins.listToAttrs (map (r: { name = r.id; value = r; }) rows);
+      byId = builtins.listToAttrs (map
+        (r: { name = r.id; value = r; })
+        (pkgs.lib.flatten (map (r: r.insert or [ ]) rows)));
       fs = byId."mcp-filesystem".config;
       rm = byId."mcp-remote".config;
       gh = byId."mcp-gh".config;
+      allInsertShaped = builtins.all (r: r ? insert && builtins.length r.insert == 1) rows;
       refs = (dshLib.applyPlugins {
         inherit pkgs;
         cfg = {
@@ -331,7 +334,8 @@ in
       assert' = c: m: pkgs.lib.assertMsg c m;
     in
     pkgs.runCommand "dsh-mcp-render-check" { } (builtins.seq ([
-      (assert' (byId ? "mcp-filesystem" && byId ? "mcp-remote" && byId ? "mcp-gh") "dsh-mcp-render: one row per server must render")
+      (assert' allInsertShaped "dsh-mcp-render: rows must be insert-wrapped (patch rows for unknown ids are warn-skipped by the loader)")
+      (assert' (byId ? "mcp-filesystem" && byId ? "mcp-remote" && byId ? "mcp-gh") "dsh-mcp-render: one entry per server must render")
       (assert' (fs.serverName == "filesystem" && fs.command != null) "dsh-mcp-render: stdio server must carry serverName+command")
       (assert' (!fs ? cwd && !fs ? toolCallTimeoutMs) "dsh-mcp-render: null fields must be omitted")
       (assert' (fs.reconnect.maxAttempts == 5) "dsh-mcp-render: settings escape hatch must merge into config")
@@ -343,7 +347,8 @@ in
       (assert' (builtins.length refs == 1 && builtins.head refs == "/run/secrets/fake-gh") "dsh-mcp-render: mcpSecretRefs must dedupe and collect")
     ]) "touch $out");
 
-  # skills 源校验:平铺 .md / 目录束(SKILL.md)双形态 + 双负例
+  # skills 源校验:平铺 .md / 目录束(SKILL.md)双形态 + 双负例 +
+  # 依赖冲突负例(声明 skills 而 disable 发现插件 → eval throw)
   dsh-skills =
     let
       ok = dshLib.validateSkills {
@@ -354,6 +359,26 @@ in
         (dshLib.validateSkills { x.source = ./fixtures; }) null);
       badExt = builtins.tryEval (builtins.deepSeq
         (dshLib.validateSkills { x.source = ./checks.nix; }) null);
+      applyWith = extra: dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          profiles = { default = { }; };
+          plugins = { };
+          skills = { };
+          presets = { };
+          inBoxPlugins = { };
+        } // extra;
+      };
+      skillClash = builtins.tryEval (builtins.deepSeq
+        (applyWith {
+          skills.flat.source = ./fixtures/skill-flat.md;
+          inBoxPlugins."skill-filesystem".enable = false;
+        }).facePlugins null);
+      presetClash = builtins.tryEval (builtins.deepSeq
+        (applyWith {
+          presets.mine.source = ./fixtures/preset-ok;
+          inBoxPlugins."agent-presets".enable = false;
+        }).facePlugins null);
       assert' = c: m: pkgs.lib.assertMsg c m;
     in
     pkgs.runCommand "dsh-skills-check" { } (builtins.seq ([
@@ -361,6 +386,8 @@ in
       (assert' (ok.bundle == "bundle") "dsh-skills: directory must map to <name>/")
       (assert' (!badDir.success) "dsh-skills: directory without SKILL.md must throw")
       (assert' (!badExt.success) "dsh-skills: non-.md file must throw")
+      (assert' (!skillClash.success) "dsh-skills: skills + skill-filesystem disabled must throw at eval time")
+      (assert' (!presetClash.success) "dsh-skills: presets + agent-presets disabled must throw at eval time")
     ]) "touch $out");
 
   # secret 注入行为级验证:真跑 wrapper 启动块,对物化 patch 注入真值,
@@ -415,6 +442,54 @@ in
       grep -q REALTOKEN123 "$pf" || { echo "secret not injected"; cat "$pf"; exit 1; }
       ! grep -q '@dsh-secret:' "$pf" || { echo "placeholder survived"; exit 1; }
       [ "$(stat -c %a "$pf")" = "600" ] || { echo "mode not 0600: $(stat -c %a "$pf")"; exit 1; }
+      touch $out
+    '';
+
+  # MCP 行必须真的进组合树:patch 形状(带 id 的顶层行)对树上不存在的
+  # id 只 warn+skip(实测 cordis-plugin-include,7 行全丢 → /mcp 空屏),
+  # 此 check 用 dump-config 端到端验证 insert 通道生效
+  dsh-mcp-in-tree =
+    let
+      mcpRows = (dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          profiles = { default = { }; };
+          plugins = { };
+          inBoxPlugins = { };
+          mcpServers.probe = {
+            transport = "stdio";
+            command = "true";
+            args = [ ];
+            env = { };
+            cwd = null;
+            url = null;
+            headers = { };
+            toolCallTimeoutMs = null;
+            failOnStartupError = false;
+            settings = { };
+          };
+        };
+      }).mcpPatches;
+      bundle = dshLib.buildProfile {
+        inherit pkgs;
+        profile = dshLib.mkProfile {
+          name = "mcp-tree";
+          plugins = [ "@deepseek-ai/dsh-base" ];
+          userPatchesFile = null;
+          userPatches = mcpRows;
+        };
+      };
+    in
+    pkgs.runCommand "dsh-mcp-in-tree-check" { } ''
+      ${materialize "mcp-tree" bundle}
+      ${pkgs.dsh}/bin/dsh --profile mcp-tree --dump-config > "$TMPDIR/dump.log" 2>&1 \
+        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      grep -q 'mcp-probe' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "mcp entry missing from composed tree" >&2; exit 1;
+      }
+      ! grep -q 'entry "mcp-probe" not found' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "mcp row was warn-skipped (patch shape, not insert)" >&2; exit 1;
+      }
       touch $out
     '';
 
