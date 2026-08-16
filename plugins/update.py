@@ -35,12 +35,17 @@ ROOT = repo_root()
 NAMES = ROOT / "plugins" / "names.txt"
 GENERATED = ROOT / "plugins" / "generated.nix"
 
-_token_file = Path("/run/secrets/github_token")
-_HEADERS = (
-    {"Authorization": f"Bearer {_token_file.read_text().strip()}"}
-    if _token_file.is_file()
-    else {}
+# GitHub token:环境变量优先(符合惯例,CI 用 GITHUB_TOKEN),缺省回落
+# 本机 sops 路径;都没有 → 匿名(60 req/h,小清单够用)
+_token = (
+    os.environ.get("GITHUB_TOKEN")
+    or (
+        Path("/run/secrets/github_token").read_text().strip()
+        if Path("/run/secrets/github_token").is_file()
+        else ""
+    )
 )
+_HEADERS = {"Authorization": f"Bearer {_token}"} if _token else {}
 
 
 def api(path: str):
