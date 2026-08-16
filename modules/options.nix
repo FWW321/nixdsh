@@ -348,18 +348,52 @@ in
       '';
     };
 
-    # 禁用插件(in-box 自带路由/条目):每个 profile 的 patch 层追加
-    # { id; disabled = true; } 行。典型用例:只用自建 provider 时禁掉
-    # in-box 的 llm-deepseek(模型选择器不再显示 deepseek)。
-    # disabled 是 cordis loader 行级原生语义(!!js 表达式亦可用,走 userPatches)
-    disabledPlugins = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      example = [ "llm-deepseek" ];
+    # in-box cordis 条目开关/覆盖(全局,进所有 profile 的用户 patch 层)。
+    # 条目默认状态有三种(开/关/!!js 条件),且随 bundle 组合变化 —— 如
+    # tool-bash 基础树启用、被 dsh-tui 的 patch 关掉;用户层是最后一层,
+    # enable 双向生效(实测:disabled: false 可反向启用 bundle 关掉的条目)。
+    #
+    # 已知条目 id(rc.5 base 树,`dsh --dump-config` 可查全量;第三方 bundle
+    # 的条目 id 同样可写):
+    #   llm-deepseek / llm-pi-ai / web-search-deepseek / timer / hmr /
+    #   fs-sandbox / bash-sandbox / pwsh-sandbox / approval / permission /
+    #   shell-env / tool-bash / tool-pwsh / tool-jobs / storage ...
+    # 刻意不做封闭 enum:条目集依赖 profile 组合(求值期不可知),封闭集
+    # 会误伤第三方 bundle 条目 —— 免费键 + 文档枚举是诚实边界
+    inBoxPlugins = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          enable = lib.mkOption {
+            type = lib.types.nullOr lib.types.bool;
+            default = null;
+            example = false;
+            description = ''
+              null(缺省)= 不表态,沿用组合树默认;false = 追加
+              disabled: true 行;true = 追加 disabled: false 行
+              (反向启用默认关闭的条目)。
+            '';
+          };
+          config = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+            description = ''
+              条目 config 覆盖(整行替换语义:覆盖时必须重述该行全部键,
+              只改一个键也要带其余键)。与 enable 可并用。
+            '';
+          };
+        };
+      });
+      default = { };
+      example = lib.literalExpression ''
+        {
+          llm-deepseek.enable = false;   # 只用自建 provider 时关掉官方路由
+          hmr.enable = true;             # 反向启用默认关闭的条目
+        }
+      '';
       description = ''
-        要禁用的 cordis 条目 id(dsh --dump-config 可查),如 in-box 的
-        llm-deepseek / web-search-deepseek。渲染为所有 profile 的
-        patch 行 disabled: true(loader 跳过该条目,不注册)。
+        in-box cordis 条目(dsh-base 等内置树声明的插件)开关与 config
+        覆盖。渲染为所有 profile 用户 patch 层的行级 patch(追加在 bundle
+        patch 与 typed 插件层之后,同 id 后行胜出)。
       '';
     };
 

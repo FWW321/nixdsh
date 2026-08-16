@@ -92,9 +92,6 @@ let
       plugins,
       userPatchesFile ? null,
        userPatches ? [ ],
-       # 追加为 disabled 行的 cordis 条目 id(选项 disabledPlugins;
-       # 放在 patch 层末尾,晚于插件 bundle patch 生效)
-       disabled ? [ ],
      }:
     let
       classify =
@@ -116,8 +113,6 @@ let
     in
     assert unique; {
       inherit name userPatchesFile userPatches;
-      # disabled 行追加在用户 patch 之后(patch 顺序即叠加顺序,后行胜出)
-      patches = userPatches ++ (map (id: { inherit id; disabled = true; }) disabled);
       plugins = classified;
       # 层序 = in-box 名 + 有 patch 的 nix 插件名,保持用户声明顺序(dsh 按 bundle 顺序叠加)
       layers =
@@ -149,12 +144,13 @@ let
         mkdir -p "$out/node_modules/$(dirname ${escapeShellArg p.packageName})"
         ln -s ${escapeShellArg (toString p.packagePath)} "$out/node_modules/${escapeShellArg p.packageName}"
       '';
-      # 显式 userPatchesFile 是全权委托,不再追加 disabled 行
+      # 显式 userPatchesFile 是全权委托,不再追加任何行(typed 层产物进
+      # userPatches,同样不落;需要共存时改用内联 userPatches)
       patchContent =
         if profile.userPatchesFile != null then
           ''cp ${escapeShellArg (toString profile.userPatchesFile)} "$out/cordis.patch.yml"''
         else
-          ''printf '%s' ${escapeShellArg (builtins.toJSON profile.patches)} > "$out/cordis.patch.yml"'';
+          ''printf '%s' ${escapeShellArg (builtins.toJSON profile.userPatches)} > "$out/cordis.patch.yml"'';
     in
     pkgs.runCommand "dsh-profile-${profile.name}"
       {
@@ -319,8 +315,19 @@ let
           patches = patchRows con;
         })
         (lib.filterAttrs (_: p: p.enable) cfg.plugins);
+      # in-box 条目行(全局,进所有 profile 的用户 patch 层;行级 disabled 键
+      # 是 cordis loader 原生语义,实测可双向覆盖 bundle 层的 disabled)
+      inBoxPatches =
+        mapAttrsToList
+          (id: p:
+            { inherit id; }
+            // (lib.optionalAttrs (p.enable != null) { disabled = !p.enable; })
+            // (lib.optionalAttrs (p.config != { }) { inherit (p) config; }))
+          cfg.inBoxPlugins;
     in
     {
+      # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜出)
+      inherit inBoxPatches;
       # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后)
       perProfile = listToAttrs
         (map
@@ -329,8 +336,9 @@ let
               map (c: c.plugin.source)
                 (filter (c: builtins.elem profileName c.profiles) contributions);
             extraPatches =
-              concatMap (c: c.patches)
-                (filter (c: builtins.elem profileName c.profiles) contributions);
+              (concatMap (c: c.patches)
+                (filter (c: builtins.elem profileName c.profiles) contributions))
+              ++ inBoxPatches;
           })
           (attrNames cfg.profiles));
     };
@@ -362,9 +370,7 @@ let
       profileBundles = mapAttrs
         (name: p: buildProfile {
           inherit pkgs;
-          profile = mkProfile { inherit name; } // (withPlugins name p) // {
-            disabled = cfg.disabledPlugins;
-          };
+          profile = mkProfile { inherit name; } // (withPlugins name p);
         })
         cfg.profiles;
     in

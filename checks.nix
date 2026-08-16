@@ -33,6 +33,32 @@ let
     "@deepseek-ai/dsh-web-app"
   ];
 
+  # inBoxPlugins 双向渲染:disable/enable/config 三态行落进 bundle patch
+  inBoxRows =
+    let
+      rows = (dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          plugins = { };
+          profiles = { default = { }; };
+          inBoxPlugins = {
+            "llm-deepseek".enable = false;
+            hmr.enable = true;
+            "web-search-deepseek".enable = null; # 不表态 → 无行
+            timer.config.timeoutMs = 30000;
+          };
+        };
+      }).inBoxPatches;
+      asSet = builtins.listToAttrs (map (r: { name = r.id; value = r; }) rows);
+      has = id: builtins.elem id (builtins.attrNames asSet);
+    in
+    pkgs.runCommand "dsh-inbox-rows-check" { } (builtins.seq ([
+      (pkgs.lib.assertMsg (!has "web-search-deepseek") "inBoxPlugins: null enable must emit no row")
+      (pkgs.lib.assertMsg (asSet."llm-deepseek".disabled == true) "inBoxPlugins: enable=false must set disabled=true")
+      (pkgs.lib.assertMsg (asSet.hmr.disabled == false) "inBoxPlugins: enable=true must set disabled=false")
+      (pkgs.lib.assertMsg (asSet.timer.config.timeoutMs == 30000) "inBoxPlugins: config must render")
+    ]) "touch $out");
+
   # 物化 bundle 到 scratch DSH_HOME(dsh boot 会改写 profile 根 cordis.yml,须可写副本)
   materialize = name: bundle: ''
     home="$TMPDIR/dsh-home"

@@ -20,7 +20,7 @@ let
     name = cfg.binName;
   };
 
-  # typed 插件层增量 + 原始 profile 声明 → 最终 profile
+  # typed 插件层增量 + in-box 条目行 + 原始 profile 声明 → 最终 profile
   applied = dshLib.applyPlugins { inherit cfg pkgs; };
   finalProfiles = lib.mapAttrs
     (name: p:
@@ -37,7 +37,6 @@ let
       profile = dshLib.mkProfile {
         inherit name;
         inherit (p) plugins userPatchesFile userPatches;
-        disabled = cfg.disabledPlugins;
       };
     })
     finalProfiles;
