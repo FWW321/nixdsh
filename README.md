@@ -77,7 +77,7 @@ nixdsh/
 │                      #   renderWrapper                    yq-merge settings + profile 注入
 │                      #   mkDsh                            nixvim 的 mkNixvim 同构独立实例化
 ├── modules/options.nix# programs.dsh 共享 options(HM/NixOS/mkDsh 三方消费)
-├── hm-module.nix      # HM 消费面:wrappers + activation 物化 + systemd user 服务
+├── hm-module.nix      # HM 消费面:wrapper(子命令分发) + activation 物化 + systemd user 服务
 ├── nixos-module.nix   # 薄 NixOS 消费面(systemPackages)
 ├── checks.nix         # profile 模型验证:结构/正例/负例 fail-loud
 ├── plugins/           # dshPlugins 集合(vimPlugins 同构):
@@ -111,15 +111,24 @@ nixdsh/
    | 功能插件 | `plugins.<name>` | `enable = true`(`profiles = []` 缺省全分发) | 否 |
    | 交互面 | `plugins.<name>.face = "<名>"` | 每种 UI 入口一个(有界) | 是(自动生成) |
 
-   加功能插件 = 一处 `enable`,零新增;加交互面 = 一处
-   `plugins.<name> = { enable; face; source; }`,自动生成
-   `profiles.<face> = [ base + source ]` 与 `dsh-<face>` wrapper ——
-   [base+face] 配方由模块一次编码,用户无从写错(base 丢失/顺序错误)。
-   face 插件不参与跨 profile 分发(互斥);与显式 `profiles.<face>` 声明
-   冲突、重复 face 名、缺 source 均求值期 fail-loud。
-   显式 `profiles.*` 保留为全权逃生口(自定义层序/patch);base 在其中
-   显式重复是刻意的 —— plugins 是有序全树规格,隐式默认会被显式设置
-   整体替换 → 静默丢 base → boot 期才炸(fail-loud 路径,nobase check 覆盖)。
+    加功能插件 = 一处 `enable`,零新增;加交互面 = 一处
+    `plugins.<name>.enable = true`(source/face 均可省:registry 收录的
+    插件按键名尾缀反查,face 读收录时的 `face=` 元数据),自动生成
+    `profiles.<face> = [ base + source ]` 与子命令入口 `dsh <face>` ——
+    [base+face] 配方由模块一次编码,用户无从写错(base 丢失/顺序错误)。
+    face 插件不参与跨 profile 分发(互斥);与显式 `profiles.<face>` 声明
+    冲突、重复 face 名、撞上游子命令(保留集从上游 CLI 自动提取,web 除外
+    —— 上游 `dsh web` 已等价 boot)均求值期 fail-loud。
+    显式 `profiles.*` 保留为全权逃生口(自定义层序/patch);base 在其中
+    显式重复是刻意的 —— plugins 是有序全树规格,隐式默认会被显式设置
+    整体替换 → 静默丢 base → boot 期才炸(fail-loud 路径,nobase check 覆盖)。
+
+## 入口
+
+单一 `dsh` wrapper:profile 子命令分发 `dsh <profile>` ≡
+`dsh --profile <profile>`(手写 profiles 与自动 face 同权;`web` 走上游
+原生子命令)。不再生成 per-profile wrapper(`dsh-<face>` 等)—— 子命令
+分发等价,独立入口只是 $PATH 噪音,短命令需求由 shell alias 承担。
 
 ## 装插件
 
@@ -136,7 +145,7 @@ git commit -am "dshPlugins: +sysmon"
 **方式 B:通用层直接声明(任意插件,无需 module)**
 
 ```nix
-programs.dsh.plugins.dsh-sysmon = {          # 名字=packageName → source 免声明
+programs.dsh.plugins.dsh-sysmon = {          # registry 收录 → source 免声明(键名尾缀反查)
   enable = true;
   patchId = "dsh-sysmon";                    # settings 渲染为 { id; config; } patch 行
   settings = { position = "bottom-right"; }; # 整行替换语义!

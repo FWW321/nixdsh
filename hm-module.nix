@@ -1,8 +1,9 @@
 # filepath: ~/code/FWW321/nixdsh/hm-module.nix
 # dsh Home Manager 模块 —— programs.dsh
 # 消费面:
-#   - home.packages:默认 dsh wrapper(settings yq-merge + defaultProfile 注入)
-#     + 每 profile 一个 dsh-<name> wrapper(强制绑定该 profile)
+#   - home.packages:单一 dsh wrapper(settings yq-merge + defaultProfile 注入
+#     + profile 子命令分发:dsh <profile> ≡ dsh --profile <profile>;
+#     web 走上游原生子命令,不再生成 per-profile wrapper)
 #   - home.activation:profile bundle 物化到 $DSH_HOME/profiles/<name>
 #     (Samuka007 stamp 方案:store 路径比对,未变不动;dsh boot 会改写 profile 根
 #      cordis.yml,故物化为可写副本而非 symlink)
@@ -18,15 +19,18 @@ let
   # typed 插件层增量 + in-box 条目行 + 原始 profile 声明 + face 自动 profile
   # → 最终 profile
   applied = dshLib.applyPlugins { inherit cfg pkgs; };
+  allProfiles = cfg.profiles // applied.facePlugins;
 
-  # 主 wrapper 挂 face 子命令分发(dsh <face> → --profile <face>);名单来自
-  # face 自动生成结果,用户零声明。dsh-<name> wrapper 已固定绑定,不分发
+  # 单一入口:主 wrapper 挂 profile 子命令分发(dsh <profile> →
+  # --profile <profile>);名单 = 手写 profiles + 自动 face,用户零声明。
+  # 不再生成 per-profile wrapper(dsh-<face> 等):子命令分发等价,独立
+  # wrapper 只是 $PATH 噪音;短命令需求由 shell alias 承担。
+  # 撞上游子命令(web 除外)在 renderWrapper 层 eval 期 throw
   mainWrapper = dshLib.renderWrapper {
     inherit cfg pkgs;
     name = cfg.binName;
-    faces = lib.attrNames applied.facePlugins;
+    subcommands = lib.attrNames allProfiles;
   };
-  allProfiles = cfg.profiles // applied.facePlugins;
   finalProfiles = lib.mapAttrs
     (name: p:
       let inc = applied.perProfile.${name} or { extraPlugins = [ ]; extraPatches = [ ]; }; in
@@ -45,14 +49,6 @@ let
       };
     })
     finalProfiles;
-
-  profileWrappers = lib.mapAttrs
-    (name: _: dshLib.renderWrapper {
-      inherit cfg pkgs;
-      name = "dsh-${name}";
-      fixedProfile = name;
-    })
-    allProfiles;
 
   # activation:物化不可变 bundle 为可写副本(dsh 每次 boot 改写 profile 根 cordis.yml)
   activateProfile = name: bundle:
@@ -90,7 +86,7 @@ in
   imports = [ ./modules/options.nix ];
 
   config = lib.mkIf cfg.enable {
-    home.packages = [ mainWrapper ] ++ lib.attrValues profileWrappers;
+    home.packages = [ mainWrapper ];
 
     # unstable HM:dag 在 config.lib(lib 参数未扩展,lib.hm.dag 已移除)
     home.activation.dshProfiles =

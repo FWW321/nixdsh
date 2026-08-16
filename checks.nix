@@ -69,12 +69,23 @@ let
               patches = [ ];
               patchId = null;
             };
+            # 零 source + 零 face:registry 尾名反查(键名 dsh-tui →
+            # @deepseek-harness-tui/dsh-tui)+ passthru.dshFace → face "tui"
+            "dsh-tui" = {
+              enable = true;
+              face = null;
+              source = null;
+              profiles = [ ];
+              settings = { };
+              patches = [ ];
+              patchId = null;
+            };
           };
           inBoxPlugins = { };
         };
       };
       assert' = cond: msg: pkgs.lib.assertMsg cond msg;
-      # dsh <face> 子命令分发:主 wrapper 脚本内容(build 期 grep);
+      # dsh <profile> 子命令分发:主 wrapper 脚本内容(build 期 grep);
       # web 排除(上游原生 web 子命令已等价 boot profiles.web)
       fakeCfg = {
         settings = { };
@@ -90,42 +101,34 @@ let
       dispatchWrapper = dshLib.renderWrapper {
         cfg = fakeCfg;
         inherit pkgs;
-        faces = [ "tui" "web" ];
+        subcommands = [ "tui" "web" ];
       };
       plainWrapper = dshLib.renderWrapper {
         cfg = fakeCfg;
         inherit pkgs;
       };
-      # 保留名负例:face "plugin" 与上游 pnpm 子命令冲突 → 求值期 throw。
-      # tryEval 须强制到 .facePlugins(attrset WHNF 不触发内部 seq 断言)
-      badPlugin = builtins.tryEval
-        (builtins.seq
-          (dshLib.applyPlugins {
+      # 保留名负例:profile/face 名撞上游子命令(plugin 语义 ≠ profile
+      # boot)→ renderWrapper 求值期 throw。fake package 无 bin.js →
+      # upstreamSubcommands 回落内置名单 {web,plugin};tryEval 须强制
+      # 求值到脚本内容(writeShellScriptBin derivation)
+      badCmd = builtins.tryEval
+        (builtins.deepSeq
+          (dshLib.renderWrapper {
+            cfg = fakeCfg;
             inherit pkgs;
-            cfg = {
-              profiles = { };
-              plugins."terminal" = {
-                enable = true;
-                face = "plugin";
-                source = "@deepseek-ai/dsh-headless";
-                profiles = [ ];
-                settings = { };
-                patches = [ ];
-                patchId = null;
-              };
-              inBoxPlugins = { };
-            };
-          }).facePlugins
+            subcommands = [ "plugin" ];
+          })
           null);
       assertions = toString [
         (assert' (r.facePlugins ? web) "dsh-face-gen: in-box table must derive 'web' from null face")
         (assert' (r.facePlugins ? my-desktop) "dsh-face-gen: face=true must derive attr key name")
         (assert' (!r.facePlugins ? rotator) "dsh-face-gen: face=false must suppress to function plugin")
+        (assert' (r.facePlugins ? tui) "dsh-face-gen: zero-source registry lookup must derive face 'tui' from passthru.dshFace")
         (assert' (r.perProfile ? web && r.perProfile ? my-desktop)
           "dsh-face-gen: perProfile must cover auto faces")
         (assert' (builtins.length r.perProfile.web.extraPlugins == 1)
           "dsh-face-gen: suppressed (false) plugin must distribute as function plugin")
-        (assert' (!badPlugin.success) "dsh-face-gen: face 'plugin' must be rejected at eval time")
+        (assert' (!badCmd.success) "dsh-face-gen: name clashing upstream subcommand must be rejected at eval time")
       ];
     in
     # seq 强制断言求值(任一失败 → 求值期 fail-loud);buildCommand grep

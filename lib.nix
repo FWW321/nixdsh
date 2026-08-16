@@ -236,13 +236,41 @@ let
       }
     );
 
+  # 上游 CLI 子命令集(自动):commander 在 bin.js 的注册模式
+  # program.command("<name>")。上游加子命令自动进保留集;
+  # 文件缺失(非 dsh 包/测试 stub)回落内置名单;文件在但零匹配 →
+  # throw(上游布局变化,fail-loud 提示更新此处正则)
+  upstreamSubcommands = package:
+    let
+      binJs = "${toString package}/lib/bin.js";
+      fallback = [ "web" "plugin" ];
+    in
+    if !builtins.pathExists binJs then fallback
+    else
+      let
+        parts = builtins.split ''program\.command\("''
+          (builtins.readFile binJs);
+        cmds = lib.filter (c: c != null) (
+          map
+            (p: if builtins.isString p
+              then builtins.match ''([a-z0-9-]+)".*'' p
+              else null)
+            parts
+        );
+        names = lib.flatten cmds;
+      in
+      if names == [ ] then
+        throw "nixdsh: upstream dsh CLI layout changed (no program.command registrations in ${binJs}); update upstreamSubcommands in lib.nix"
+      else lib.unique names;
+
   # wrapper 渲染(TonyWu20 的 yq-merge 语义 + DSH_HOME):
   # - 声明 settings 每次启动 merge 进 settings.yaml:声明值覆盖同名键,本地其他键保留
   #   (dsh Web UI 会运行时改配置,yq merge 是唯一不与之打架的声明式方案)
-  # - face 子命令分发:dsh <face> ... → dsh --profile <face> ...(上游 CLI
-  #   子命令集封闭 {web,plugin},`dsh web` 即官方的 face-子命令样板,第三方
-  #   face 无入口,wrapper 层补同形态)。web 排除:上游原生子命令已等价
-  #   boot profiles.web;plugin 在 facePlugins 断言层直接拒绝
+  # - profile 子命令分发:dsh <profile> ... → dsh --profile <profile> ...(上游
+  #   CLI 子命令集封闭 {web,plugin},`dsh web` 即官方的 profile-子命令样板,
+  #   第三方 face 无入口,wrapper 层补同形态;名单含手写 profiles + 自动
+  #   face,用户零声明)。web 排除:上游原生子命令已等价 boot profiles.web;
+  #   其余撞上游子命令 → throw(拦截上游命令语义,如 plugin 的 pnpm 管理)
   # - profile 注入:调用无显式 --profile 且非 web/plugin 子命令(它们拒绝父级 --profile)时
   #   自动补 --profile <name>;fixedProfile 非 null 时强制绑定该 profile
   #   (face 分发改写后 --profile 已显式存在,注入逻辑自然跳过)
@@ -252,7 +280,7 @@ let
       pkgs,
       name ? "dsh",
       fixedProfile ? null,
-      faces ? [ ],
+      subcommands ? [ ],
     }:
     let
       effectiveProfile = if fixedProfile != null then fixedProfile else cfg.defaultProfile;
@@ -288,20 +316,33 @@ let
         (mapAttrsToList
           (n: v: "export ${n}=${escapeShellArg v}")
           cfg.environment);
-      # 只给主 wrapper(fixedProfile = null);dsh-<face> wrapper 已固定绑定,
-      # 二次分发无意义。仅拦 $1(与上游子命令同粒度),-- 之后的位置参数不碰
-      dispatchFaces = filter (f: f != "web") faces;
-      faceDispatch = optionalString (dispatchFaces != [ ]) ''
-        if [ $# -gt 0 ]; then
-          case "$1" in
-            ${concatStringsSep "|" dispatchFaces})
-              _dsh_face="$1"
-              shift
-              set -- --profile "$_dsh_face" "$@"
-              ;;
-          esac
-        fi
-      '';
+      # 只给主 wrapper(fixedProfile = null)。仅拦 $1(与上游子命令同粒度),
+      # -- 之后的位置参数不碰;web 排除(上游原生 web 子命令已等价 boot
+      # profiles.web)。撞上游子命令(eval 期 throw,名单自动提取):
+      # 上游子命令语义 ≠ profile boot(如 plugin 是 pnpm 管理),分发会
+      # 静默拦截上游命令
+      _clashAssert =
+        let
+          reserved = upstreamSubcommands cfg.package;
+          clashing = filter (f: f != "web" && builtins.elem f reserved) subcommands;
+        in
+        if clashing != [ ] then
+          throw "programs.dsh: profile/face names clash with upstream dsh subcommands (${concatStringsSep ", " clashing}; reserved: ${concatStringsSep ", " reserved}). Rename the profile or the face — dispatch would shadow the upstream command."
+        else null;
+      dispatchFaces = filter (f: f != "web") subcommands;
+      faceDispatch =
+        builtins.seq _clashAssert
+          (optionalString (dispatchFaces != [ ]) ''
+            if [ $# -gt 0 ]; then
+              case "$1" in
+                ${concatStringsSep "|" dispatchFaces})
+                  _dsh_face="$1"
+                  shift
+                  set -- --profile "$_dsh_face" "$@"
+                  ;;
+              esac
+            fi
+          '');
       profilePrelude = optionalString (effectiveProfile != null) ''
         wants_profile=0
         is_subcommand=0
@@ -339,39 +380,60 @@ let
     { cfg, pkgs }:
     let
       enabled = filter (p: p.enable) (attrValues cfg.plugins);
+      # registry 尾名反查:键名 "dsh-tui" → "@deepseek-harness-tui/dsh-tui"
+      # (nixvim 式零 source)。attr 名 <scope>/<pkg>,pkg == <键名> 或
+      # "dsh-<键名>" 双形态;唯一匹配取之,空 = null(调用方决定报错语义),
+      # 多匹配 throw 列候选(须显式 source)
+      registryLookup = name:
+        let
+          table = pkgs.dshPlugins or { };
+          tailOf = k: lib.last (lib.splitString "/" k);
+          candidates = lib.filterAttrs
+            (k: _: tailOf k == name || tailOf k == "dsh-${name}")
+            table;
+          ns = attrNames candidates;
+        in
+        if ns == [ ] then null
+        else if builtins.length ns == 1 then table.${builtins.head ns}
+        else throw "programs.dsh.plugins.${name}: registry tail-name lookup is ambiguous (${concatStringsSep ", " ns}); set source explicitly";
       # 名字→源:缺省 registry(不在 registry 且未显式给 source 时,mkPlugin
       # 端 passthru 缺 packageName 会 throw —— 提前给友好错误)。
-      # face 插件跳过:它不进分发,源直接取自声明(p.source 或键名映射的
-      # in-box bundle 名,如 headless → @deepseek-ai/dsh-headless)
+      # face 插件跳过分发:源取 p.source / in-box 键名映射(headless →
+      # @deepseek-ai/dsh-headless)/ registry 尾名反查
       faceSourceOf = name: p:
         if p.source != null then p.source
         else if inBoxFaces ? "@deepseek-ai/dsh-${name}" then "@deepseek-ai/dsh-${name}"
-        else throw "programs.dsh.plugins.${name}: face plugin requires an explicit source (or registry entry with face metadata)";
+        else if registryLookup name != null then registryLookup name
+        else throw "programs.dsh.plugins.${name}: face plugin requires a source (registry entry, in-box bundle, or explicit source)";
       sourceOf = name: p:
         if p.source != null then p.source
         else if pkgs ? dshPlugins && pkgs.dshPlugins ? ${name} then pkgs.dshPlugins.${name}
+        else if registryLookup name != null then registryLookup name
         else throw "programs.dsh.plugins.${name}: no source given and '${name}' not in pkgs.dshPlugins (add it to plugins/names.txt and run the updater, or set source)";
       # 交互面插件 → 自动 profile(base + 本源)。face 插件互斥不参与分发
       # (进其他树 = duplicate entry / TTY 致死,均实测),功能插件分发到
       # 所有 face(profiles = [] 缺省语义含自动生成的 face)。
-      # face 三级推导:显式 plugins.<name>.face > source derivation 的
-      # passthru.dshFace(registry 收录时人审) > inBoxFaces(in-box 表)。
+      # face 推导(源解析感知):显式 plugins.<name>.face > source 的
+      # passthru.dshFace(registry 收录时人审)/ inBoxFaces(in-box 表) >
+      # 零 source 时先解析源(registry 反查 derivation 同样带 dshFace)再读。
       # 无法纯自动判定互斥(id 冲突之外还有 TTY 等运行期约束,eval 期
       # 不可见),故判定下沉为插件元数据 —— 用户侧只需 enable。
       # face 名约束 kebab-case:它被拼进文件路径($DSH_HOME/profiles/<face>)
-      # 与 wrapper 名(dsh-<face>),同上游 settingsNamespace 的模式
+      # 与子命令名(dsh <face>),同上游 settingsNamespace 的模式
       validFace = f:
         builtins.match "[a-z][a-z0-9]*(-[a-z0-9]+)*" f != null;
+      dshFaceOf = s:
+        if lib.isDerivation s then (s.passthru or { }).dshFace or null
+        else if builtins.isString s && inBoxFaces ? ${s} then inBoxFaces.${s}
+        else null;
       deriveFace = name: p:
         if p.face != null then p.face
-        else if p.source != null && lib.isDerivation p.source
-          && (p.source.passthru or { }).dshFace or null != null then p.source.passthru.dshFace
-        else if p.source != null && builtins.isString p.source
-          && inBoxFaces ? ${p.source} then inBoxFaces.${p.source}
-        # source 未给 → 按键名反查 in-box(web-app/headless 零声明齐活)
-        else if p.source == null && inBoxFaces ? "@deepseek-ai/dsh-${name}"
-          then inBoxFaces."@deepseek-ai/dsh-${name}"
-        else null;
+        else if p.source != null then dshFaceOf p.source
+        else
+          # 零 source:in-box 键名反查 > registry 反查(两者都返回源,读元数据)
+          if inBoxFaces ? "@deepseek-ai/dsh-${name}" then inBoxFaces."@deepseek-ai/dsh-${name}"
+          else if registryLookup name != null then dshFaceOf (registryLookup name)
+          else null;
       # 最终 face 名:null = 非交互面;false = 显式压制(registry 标记的
       # face 当功能插件用)→ 也归 null;true = 从 attr 键派生(module system
       # 键唯一 → 无碰撞);字符串 = 具体名。faceOf 之后只剩 null|true|str
@@ -388,8 +450,6 @@ let
           _dupAssert =
             if builtins.length faceNames != builtins.length (lib.unique faceNames) then
               throw "programs.dsh.plugins: duplicate face names (${concatStringsSep ", " faceNames})"
-            else if builtins.elem "plugin" faceNames then
-              throw "programs.dsh.plugins: face name 'plugin' is reserved (upstream dsh subcommand with different semantics; web is fine — upstream \`dsh web\` already aliases --profile web)"
             else if any (f: !validFace f) faceNames then
               throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and dsh-<face> wrapper name"
             else null;
