@@ -338,11 +338,13 @@ let
   # "@dsh-secret:<path>@",wrapper 启动期对物化副本注入真值 + chmod 600
   # (settingsPrelude 同机时机;轮换安全:每次启动重注,密钥文件更新即生效)
   secretPlaceholder = path: "@dsh-secret:${path}@";
-  # 值渲染:string 直存;{ secretFile; prefix? } → 占位符(prefix 拼前)
+  # 值渲染:string 直存;{ secretFile; prefix? } → 占位符(prefix 拼前;
+  # submodule 输出 prefix 恒存在(null),须显式判空而非 `or`)
   renderSecretVal = v:
     if builtins.isString v then { text = v; refs = [ ]; }
     else if v ? secretFile then
-      { text = (v.prefix or "") + secretPlaceholder v.secretFile; refs = [ v.secretFile ]; }
+      let pre = if v.prefix or null == null then "" else v.prefix; in
+      { text = pre + secretPlaceholder (toString v.secretFile); refs = [ (toString v.secretFile) ]; }
     else { text = toString v; refs = [ ]; };
   # attrsOf 值渲染:返回 { data = 同形 attrs;text-only; refs = 去重 refs }
   renderSecretAttrs = attrs:
