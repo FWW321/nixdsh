@@ -335,6 +335,9 @@ let
           && (p.source.passthru or { }).dshFace or null != null then p.source.passthru.dshFace
         else if p.source != null && builtins.isString p.source
           && inBoxFaces ? ${p.source} then inBoxFaces.${p.source}
+        # source 未给 → 按键名反查 in-box(web-app/headless 零声明齐活)
+        else if p.source == null && inBoxFaces ? "@deepseek-ai/dsh-${name}"
+          then inBoxFaces."@deepseek-ai/dsh-${name}"
         else null;
       # 最终 face 名:null = 非交互面;false = 显式压制(registry 标记的
       # face 当功能插件用)→ 也归 null;true = 从 attr 键派生(module system
