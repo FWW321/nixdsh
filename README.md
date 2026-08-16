@@ -109,12 +109,17 @@ nixdsh/
    |---|---|---|---|
    | 供应商/模型/条目开关 | `providers` / `defaultModel` / `inBoxPlugins` | 全局一处 | 否 |
    | 功能插件 | `plugins.<name>` | `enable = true`(`profiles = []` 缺省全分发) | 否 |
-   | 交互面 | `profiles.<face>` | 每种 UI 入口一个(有界:上游出几种 UI 是几个) | 是 |
+   | 交互面 | `plugins.<name>.face = "<名>"` | 每种 UI 入口一个(有界) | 是(自动生成) |
 
-   加功能插件 = 一处 `enable`,profile 文件零改动;仅当出现新交互面
-   bundle 才加 profile。base 在每个 profile 显式重复是刻意的 —— plugins
-   是有序全树规格,隐式默认会被显式设置整体替换 → 静默丢 base → boot 期
-   才炸(fail-loud 路径,nobase check 覆盖)。
+   加功能插件 = 一处 `enable`,零新增;加交互面 = 一处
+   `plugins.<name> = { enable; face; source; }`,自动生成
+   `profiles.<face> = [ base + source ]` 与 `dsh-<face>` wrapper ——
+   [base+face] 配方由模块一次编码,用户无从写错(base 丢失/顺序错误)。
+   face 插件不参与跨 profile 分发(互斥);与显式 `profiles.<face>` 声明
+   冲突、重复 face 名、缺 source 均求值期 fail-loud。
+   显式 `profiles.*` 保留为全权逃生口(自定义层序/patch);base 在其中
+   显式重复是刻意的 —— plugins 是有序全树规格,隐式默认会被显式设置
+   整体替换 → 静默丢 base → boot 期才炸(fail-loud 路径,nobase check 覆盖)。
 
 ## 装插件
 
