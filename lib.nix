@@ -934,11 +934,15 @@ let
            rowIdOf = name:
              let tail = lib.removePrefix "dsh-" (lib.last (lib.splitString "/" name)); in
              if lib.hasPrefix "web-search-" tail then tail else "web-search-${tail}";
-         in
-         {
-           rowId =
-             if hasRow then (p.row.id or (rowIdOf p.row.name))
-             else "web-search-${id}";
+          in
+          {
+            # submodule 输出 row.id 恒存在(default null),`or` 不触发,
+            # 须显式判空(裸 attrs 声明两种路径都走对)
+            rowId =
+              if hasRow then
+                (let id = p.row.id or null; in
+                 if id != null then id else rowIdOf p.row.name)
+              else "web-search-${id}";
             rowName = if hasRow then p.row.name else null;
             # secretFile 派生:行 config 未显式给 apiKeyEnv 时注入派生值
             #(行自描述,免疫上游默认漂移;显式 apiKeyEnv 优先)
@@ -949,9 +953,12 @@ let
               if hasRow && (p.row.secretFile or null) != null && !(base ? apiKeyEnv) then
                 base // { apiKeyEnv = secretEnvName p.row.secretFile; }
               else base;
-           source = if hasRow then (p.source or null) else null;
-           namespace = if hasRow then (p.row.settingsNamespace or null) else "web-search-${id}";
-         };
+          source = if hasRow then (p.source or null) else null;
+          # 同 rowId:submodule 下 or 不触发,显式判空
+          namespace =
+            let ns = if hasRow then (p.row.settingsNamespace or null) else null; in
+            if ns != null then ns else "web-search-${id}";
+        };
        wsBackends = mapAttrs wsBackend
          (cfgWsProviders // { "deepseek-official" = cfgWsProviders."deepseek-official" or { }; });
        # 未选中后端行(声明了但未选中 → 禁行;base 自带的 deepseek 行
@@ -1006,14 +1013,20 @@ let
           base = p.row.config or { };
         in
         {
-          rowId = p.row.id or (rowIdOf p.row.name);
+          # 显式判空:submodule 输出 row.id/settingsNamespace 恒存在(default
+          # null),`or` 不触发(checks 裸 attrs 直调测不到 module 路径)
+          rowId =
+            let id = p.row.id or null; in
+            if id != null then id else rowIdOf p.row.name;
           rowName = p.row.name;
           rowConfig =
             if (p.row.secretFile or null) != null && !(base ? apiKeyEnv) then
               base // { apiKeyEnv = secretEnvName p.row.secretFile; }
             else base;
           source = p.source or null;
-          namespace = p.row.settingsNamespace or "web-fetch-${id}";
+          namespace =
+            let ns = p.row.settingsNamespace or null; in
+            if ns != null then ns else "web-fetch-${id}";
         };
       wfBackends = mapAttrs wfBackend cfgWfProviders;
       # 选中 → insert 行 + web 行重述 fetchProvider + tool-web 行重述

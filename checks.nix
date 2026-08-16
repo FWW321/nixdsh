@@ -421,6 +421,11 @@ let
         inst = dshLib.mkDsh {
           inherit pkgs;
           modules = [{
+            programs.dsh.webFetch = "zhipu";
+            programs.dsh.webFetchProviders.zhipu.row = {
+              name = "@fww/dsh-web-fetch-zhipu";
+              secretFile = "/run/secrets/zhipu_api_key";
+            };
             programs.dsh.webSearch = "exa";
             programs.dsh.webSearchProviders.exa.row = {
               name = "@tonydua/dsh-web-search-exa";
