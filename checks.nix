@@ -90,12 +90,18 @@ in
       rendered = dshLib.renderSettings {
         settings = {
           telemetry.mode = "on";
+          "agent-default-model".reasoning = "low";
           "llm-pi-ai".providers = {
             deepseek.apiKeyEnv = "FREEFORM_KEY";
             other-gateway.apiKeyEnv = "OTHER_KEY";
           };
         };
         telemetry = { mode = "off"; };
+        defaultModel = {
+          provider = "zhipu-coding-plan";
+          model = "glm-5.3";
+          reasoningEffort = null;
+        };
         providers = {
           deepseek = {
             apiKeyEnv = "DEEPSEEK_API_KEY";
@@ -120,6 +126,9 @@ in
         (assert' (provs ? "zhipu-coding-plan") "dsh-providers-render: hand-declared route must render")
         (assert' (provs ? other-gateway) "dsh-providers-render: freeform sibling providers must survive")
         (assert' (rendered.telemetry.mode == "off") "dsh-providers-render: telemetry merge must still hold")
+        (assert' (rendered."agent-default-model".provider == "zhipu-coding-plan") "dsh-providers-render: typed defaultModel must render")
+        (assert' (rendered."agent-default-model".reasoning == "low") "dsh-providers-render: freeform defaultModel sibling keys must survive")
+        (assert' (!rendered."agent-default-model" ? reasoningEffort) "dsh-providers-render: null reasoningEffort must be omitted")
       ];
     in
     # seq 强制断言求值(任一失败 → 求值期 fail-loud),buildCommand 本身无操作

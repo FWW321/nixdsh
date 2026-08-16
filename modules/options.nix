@@ -75,6 +75,43 @@ in
       description = "typed 便利键:渲染进 settings.telemetry.mode,覆盖 freeform 同名值";
     };
 
+    # 默认模型选择(dsh-agent-default-model 命名空间段,schema 实测于 rc.5
+    # 源码:provider/model 必填,reasoningEffort 可选)。typed 覆盖 freeform
+    # settings."agent-default-model" 同名键
+    defaultModel = lib.mkOption {
+      type = lib.types.nullOr (lib.types.submodule {
+        options = {
+          provider = lib.mkOption {
+            type = lib.types.str;
+            example = "zhipu-coding-plan";
+            description = ''
+              供应商路由名。providers.<id> 的 id,或上游 catalog 路由名
+              (如 deepseek,无需在本配置声明)。
+            '';
+          };
+          model = lib.mkOption {
+            type = lib.types.str;
+            example = "glm-5.3";
+            description = "模型 id(须在该 provider 的 models 清单内)";
+          };
+          reasoningEffort = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "high";
+            description = "推理力度(off/minimal/low/medium/high/max,null 省略)";
+          };
+        };
+      });
+      default = null;
+      example = lib.literalExpression ''
+        { provider = "zhipu-coding-plan"; model = "glm-5.3"; }
+      '';
+      description = ''
+        typed 便利键:无会话级选择时 Agent 的默认模型
+        (渲染进 settings."agent-default-model")。
+      '';
+    };
+
     # ── LLM 供应商路由(dsh-llm-pi-ai 用户层)──────────────────────────
     # 渲染进 settings.yaml `llm-pi-ai.providers` 命名空间段(cordis 树 base
     # 配置之上的用户层,上游按 provider 逐项深合并,免重启生效)。

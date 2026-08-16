@@ -164,11 +164,12 @@ let
       '';
 
   # settings 渲染:freeform settings 为底,typed core(telemetry.mode /
-  # providers)后合并覆盖。providers 渲染进 llm-pi-ai 命名空间段 ——
-  # dsh-llm-pi-ai 的用户层(上游:cordis 树 base 配置 ⊕ 本段,按 provider
-  # 深合并,免重启);typed 条目逐 provider 覆盖 freeform 同名条目
+  # providers / defaultModel)后合并覆盖。providers 渲染进 llm-pi-ai 命名
+  # 空间段 —— dsh-llm-pi-ai 的用户层(上游:cordis 树 base 配置 ⊕ 本段,
+  # 按 provider 深合并,免重启);typed 条目逐 provider 覆盖 freeform 同名
+  # 条目;defaultModel 渲染进 agent-default-model 段(schema 实测于源码)
   renderSettings =
-    { settings, telemetry, providers ? { } }:
+    { settings, telemetry, providers ? { }, defaultModel ? null }:
     let
       # 省略 null/空的字段;settings 逃生口最后并(未 typed 字段直通)。
       # `or` 缺省:renderSettings 可脱离 module system 直接调用(checks/测试)
@@ -200,6 +201,15 @@ let
           providers = freeformProviders // (mapAttrs (_: renderProvider) providers);
         };
       }
+    )
+    // (
+      if defaultModel == null then { } else {
+        "agent-default-model" = (settings."agent-default-model" or { }) //
+          (lib.filterAttrs (_: v: v != null) {
+            inherit (defaultModel) provider model;
+            reasoningEffort = defaultModel.reasoningEffort or null;
+          });
+      }
     );
 
   # wrapper 渲染(TonyWu20 的 yq-merge 语义 + DSH_HOME):
@@ -217,8 +227,8 @@ let
     let
       effectiveProfile = if fixedProfile != null then fixedProfile else cfg.defaultProfile;
       settingsJSON =
-        if renderSettings { inherit (cfg) settings telemetry providers; } == { } then null
-        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers; });
+        if renderSettings { inherit (cfg) settings telemetry providers defaultModel; } == { } then null
+        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers defaultModel; });
       settingsPrelude = optionalString (settingsJSON != null) ''
         dsh_home="''${DSH_HOME:-$HOME/.dsh}"
 
