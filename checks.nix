@@ -287,12 +287,28 @@ in
             remote = {
               transport = "streamable-http";
               url = "https://mcp.example.com/mcp";
-              headers = { Authorization = "Bearer x"; };
+              headers = {
+                Authorization.secretFile = "/run/secrets/fake-token";
+                Authorization.prefix = "Bearer ";
+                X-Plain = "literal";
+              };
               command = null;
               args = [ ];
               env = { };
               cwd = null;
               toolCallTimeoutMs = 30000;
+              failOnStartupError = false;
+              settings = { };
+            };
+            gh = {
+              transport = "stdio";
+              command = "gh";
+              env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = "/run/secrets/fake-gh";
+              args = [ ];
+              cwd = null;
+              url = null;
+              headers = { };
+              toolCallTimeoutMs = null;
               failOnStartupError = false;
               settings = { };
             };
@@ -302,15 +318,29 @@ in
       byId = builtins.listToAttrs (map (r: { name = r.id; value = r; }) rows);
       fs = byId."mcp-filesystem".config;
       rm = byId."mcp-remote".config;
+      gh = byId."mcp-gh".config;
+      refs = (dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          profiles = { default = { }; };
+          plugins = { };
+          inBoxPlugins = { };
+          mcpServers = { gh.env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = "/run/secrets/fake-gh"; };
+        };
+      }).mcpSecretRefs;
       assert' = c: m: pkgs.lib.assertMsg c m;
     in
     pkgs.runCommand "dsh-mcp-render-check" { } (builtins.seq ([
-      (assert' (byId ? "mcp-filesystem" && byId ? "mcp-remote") "dsh-mcp-render: one row per server must render")
+      (assert' (byId ? "mcp-filesystem" && byId ? "mcp-remote" && byId ? "mcp-gh") "dsh-mcp-render: one row per server must render")
       (assert' (fs.serverName == "filesystem" && fs.command != null) "dsh-mcp-render: stdio server must carry serverName+command")
       (assert' (!fs ? cwd && !fs ? toolCallTimeoutMs) "dsh-mcp-render: null fields must be omitted")
       (assert' (fs.reconnect.maxAttempts == 5) "dsh-mcp-render: settings escape hatch must merge into config")
       (assert' (rm ? url && rm ? headers && rm.toolCallTimeoutMs == 30000) "dsh-mcp-render: streamable-http must carry url/headers")
       (assert' (!rm ? command && !rm ? args) "dsh-mcp-render: http server must not carry stdio fields")
+      (assert' (rm.headers.Authorization == "Bearer @dsh-secret:/run/secrets/fake-token@") "dsh-mcp-render: secretFile header must render prefix+placeholder")
+      (assert' (rm.headers.X-Plain == "literal") "dsh-mcp-render: literal header must stay literal")
+      (assert' (gh.env.GITHUB_PERSONAL_ACCESS_TOKEN == "@dsh-secret:/run/secrets/fake-gh@") "dsh-mcp-render: secretFile env must render bare placeholder")
+      (assert' (builtins.length refs == 1 && builtins.head refs == "/run/secrets/fake-gh") "dsh-mcp-render: mcpSecretRefs must dedupe and collect")
     ]) "touch $out");
 
   # skills 源校验:平铺 .md / 目录束(SKILL.md)双形态 + 双负例
@@ -332,6 +362,61 @@ in
       (assert' (!badDir.success) "dsh-skills: directory without SKILL.md must throw")
       (assert' (!badExt.success) "dsh-skills: non-.md file must throw")
     ]) "touch $out");
+
+  # secret 注入行为级验证:真跑 wrapper 启动块,对物化 patch 注入真值,
+  # 验证 0600/占位符清零(build 沙箱 /tmp 可写,fixed home 固定路径)
+  dsh-mcp-secret-inject =
+    let
+      home = "/tmp/dsh-inject-check-home";
+      secretFile = "/tmp/dsh-inject-check-secret";
+      fakeCfg = {
+        settings = { };
+        telemetry = { mode = null; };
+        providers = { };
+        defaultModel = null;
+        environment = { };
+        dshHome = home;
+        package = pkgs.hello;
+        defaultProfile = "default";
+        extraArgs = [ ];
+        mcpServers = {
+          gh = {
+            transport = "stdio";
+            command = "true";
+            env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = secretFile;
+            args = [ ];
+            cwd = null;
+            url = null;
+            headers = { };
+            toolCallTimeoutMs = null;
+            failOnStartupError = false;
+            settings = { };
+          };
+        };
+        profiles = { default = { plugins = [ ]; userPatches = [ ]; }; };
+        plugins = { };
+        inBoxPlugins = { };
+      };
+      wrapper = dshLib.renderWrapper { cfg = fakeCfg; inherit pkgs; };
+      # 模拟 activation 产物:bundle patch 含占位符
+      placeholderPatch = pkgs.writeText "cordis.patch.yml" ''
+        - id: mcp-gh
+          name: '@deepseek-ai/dsh-mcp-client'
+          config:
+            env:
+              GITHUB_PERSONAL_ACCESS_TOKEN: '@dsh-secret:${secretFile}@'
+      '';
+    in
+    pkgs.runCommand "dsh-mcp-secret-inject-check" { } ''
+      install -D -m 0644 ${placeholderPatch} ${home}/profiles/default/cordis.patch.yml
+      printf 'REALTOKEN123\n' > ${secretFile}
+      ${wrapper}/bin/dsh >/dev/null 2>&1 || true
+      pf=${home}/profiles/default/cordis.patch.yml
+      grep -q REALTOKEN123 "$pf" || { echo "secret not injected"; cat "$pf"; exit 1; }
+      ! grep -q '@dsh-secret:' "$pf" || { echo "placeholder survived"; exit 1; }
+      [ "$(stat -c %a "$pf")" = "600" ] || { echo "mode not 0600: $(stat -c %a "$pf")"; exit 1; }
+      touch $out
+    '';
 
   # renderSettings 合并语义:typed providers 逐条覆盖 freeform 同名条目、
   # null/空字段省略、freeform 命名空间其他键与其他 provider 条目保留。

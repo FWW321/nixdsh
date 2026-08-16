@@ -467,10 +467,8 @@ in
     # MCP 服务器(rc.5 dsh-mcp-client 实测):插件不在默认树,每 server
     # 一行 cordis 行(name @deepseek-ai/dsh-mcp-client),工具暴露为
     # mcp__<serverName>__<tool>。行渲染进所有 profile → 变化走 bundle
-    # 指纹重启(web 服务自动跟进)。
-    # 注意:config 落盘 $DSH_HOME/profiles/<n>/cordis.patch.yml —— 勿在
-    # env/headers 里放明文密钥(皮下进程 env 直接来自此文件),密钥走
-    # wrapper environment + 环境变量引用不可行时用上游 Web UI 运行时配置
+    # 指纹重启(web 服务自动跟进)。env/headers 值支持 secretFile 形态
+    # (占位符 + wrapper 启动期注入,store 工件零密钥)
     mcpServers = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submodule {
         options = {
@@ -490,9 +488,32 @@ in
             description = "stdio:子进程参数";
           };
           env = lib.mkOption {
-            type = lib.types.attrsOf lib.types.str;
+            type = lib.types.attrsOf (lib.types.oneOf [
+              lib.types.str
+              (lib.types.submodule {
+                options = {
+                  secretFile = lib.mkOption {
+                    type = lib.types.str;
+                    description = "密钥文件路径(运行时读,如 /run/secrets/xxx)";
+                  };
+                  prefix = lib.mkOption {
+                    type = lib.types.nullOr lib.types.str;
+                    default = null;
+                    example = "Bearer ";
+                    description = "值前缀(如 Authorization 头)";
+                  };
+                };
+              })
+            ]);
             default = { };
-            description = "stdio:子进程环境变量(注意落盘明文,勿放密钥)";
+            description = ''
+              stdio:子进程环境变量。值 = 字面字符串,或
+              { secretFile = "/run/secrets/x"; prefix? = "..."; }
+              —— secret 形态渲染为占位符(store 工件零密钥),
+              wrapper 每次启动注入真值到物化 patch(0600,轮换安全;
+              上游实测:子进程环境密钥名被 scrub,显式 env 是官方
+              唯一凭证通道)。
+            '';
           };
           cwd = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
@@ -505,9 +526,28 @@ in
             description = "streamable-http:端点 URL";
           };
           headers = lib.mkOption {
-            type = lib.types.attrsOf lib.types.str;
+            type = lib.types.attrsOf (lib.types.oneOf [
+              lib.types.str
+              (lib.types.submodule {
+                options = {
+                  secretFile = lib.mkOption {
+                    type = lib.types.str;
+                    description = "密钥文件路径(运行时读,如 /run/secrets/xxx)";
+                  };
+                  prefix = lib.mkOption {
+                    type = lib.types.nullOr lib.types.str;
+                    default = null;
+                    example = "Bearer ";
+                    description = "头值前缀(如 \"Bearer \")";
+                  };
+                };
+              })
+            ]);
             default = { };
-            description = "streamable-http:请求头(注意落盘明文,勿放密钥)";
+            description = ''
+              streamable-http:请求头。值 = 字面字符串,或
+              { secretFile; prefix? } secret 形态(同 env 的注入语义)。
+            '';
           };
           toolCallTimeoutMs = lib.mkOption {
             type = lib.types.nullOr lib.types.ints.positive;

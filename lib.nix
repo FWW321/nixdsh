@@ -32,6 +32,7 @@ let
     mapAttrs
     mapAttrsToList
     nameValuePair
+    optionalAttrs
     optionalString
     unique
     ;
@@ -327,6 +328,32 @@ let
           else throw "programs.dsh.skills.${name}.source: file ${src} must be a .md skill (or a directory containing SKILL.md)")
       skills;
 
+  # ── secret 通道(通用模式,当前消费面 mcpServers)──────────────────
+  # 上游实测约束:dsh MCP config.env/headers 是值直存(z.dict(String),无
+  # apiKeyEnv 间接层),且子进程 spawn 用 scrubbedParentEnv 擦掉父环境里
+  # KEY|PASSWORD|SECRET|TOKEN 名(官方注释:转交凭证"goes through the
+  # spec's explicit env")—— 值必须在 config 里。而 profile bundle 是
+  # 全局可读 store 工件,密钥值不可 build 期渲染。
+  # 方案(同 nixpkgs replace-secret / sops-nix 哲学):store 渲染占位符
+  # "@dsh-secret:<path>@",wrapper 启动期对物化副本注入真值 + chmod 600
+  # (settingsPrelude 同机时机;轮换安全:每次启动重注,密钥文件更新即生效)
+  secretPlaceholder = path: "@dsh-secret:${path}@";
+  # 值渲染:string 直存;{ secretFile; prefix? } → 占位符(prefix 拼前)
+  renderSecretVal = v:
+    if builtins.isString v then { text = v; refs = [ ]; }
+    else if v ? secretFile then
+      { text = (v.prefix or "") + secretPlaceholder v.secretFile; refs = [ v.secretFile ]; }
+    else { text = toString v; refs = [ ]; };
+  # attrsOf 值渲染:返回 { data = 同形 attrs;text-only; refs = 去重 refs }
+  renderSecretAttrs = attrs:
+    let
+      rendered = mapAttrs (_: renderSecretVal) attrs;
+    in
+    {
+      data = mapAttrs (_: r: r.text) rendered;
+      refs = lib.unique (concatMap (r: r.refs) (attrValues rendered));
+    };
+
   # wrapper 渲染(TonyWu20 的 yq-merge 语义 + DSH_HOME):
   # - 声明 settings 每次启动 merge 进 settings.yaml:声明值覆盖同名键,本地其他键保留
   #   (dsh Web UI 会运行时改配置,yq merge 是唯一不与之打架的声明式方案)
@@ -380,6 +407,49 @@ let
         (mapAttrsToList
           (n: v: "export ${n}=${escapeShellArg v}")
           cfg.environment);
+      # secret 注入块(mcpServers env/headers 占位符 → 真值):每次启动跑,
+      # 轮换安全(secret 文件更新即生效);改动物化副本 patch 文件(用户
+      # 目录,可 0600),store 工件永不含密钥。secret 文件缺失 → fail-loud
+      # 退出,不静默带占位符启动。
+      # 占位符清单 = mcpPatches 渲染行文本回收(单一事实源,防与渲染链漂移)
+      secretPrelude =
+        let
+          mcpRows = (applyPlugins { inherit cfg pkgs; }).mcpPatches;
+          placeholders = lib.flatten
+            (map
+              (row:
+                let m = builtins.match ".*(@dsh-secret:[^\"]*@).*" (builtins.toJSON row.config);
+                in if m == null then [ ] else m)
+              mcpRows);
+        in
+        optionalString (placeholders != [ ]) ''
+          _secrets=(
+          ${concatStringsSep "\n" (map (p: "  ${escapeShellArg p}") placeholders)}
+          )
+          for _pf in "$dsh_home"/profiles/*/cordis.patch.yml; do
+            [ -f "$_pf" ] || continue
+            _changed=0
+            _tmp="$(mktemp "$_pf.XXXXXX")"
+            cp "$_pf" "$_tmp"
+            for _ph in "''${_secrets[@]}"; do
+              if grep -qF "$_ph" "$_tmp"; then
+                _path="$(printf '%s' "$_ph" | sed -e 's/^@dsh-secret://' -e 's/@$//')"
+                if [ ! -r "$_path" ]; then
+                  echo "dsh: secret file '$_path' (MCP placeholder) unreadable" >&2
+                  rm -f "$_tmp"; exit 1
+                fi
+                ${getExe pkgs.replace-secret} "$_ph" "$_path" "$_tmp" || { rm -f "$_tmp"; exit 1; }
+                _changed=1
+              fi
+            done
+            if [ "$_changed" -eq 1 ]; then
+              chmod 0600 "$_tmp"
+              mv "$_tmp" "$_pf"
+            else
+              rm -f "$_tmp"
+            fi
+          done
+        '';
       # 只给主 wrapper(fixedProfile = null)。仅拦 $1(与上游子命令同粒度),
       # -- 之后的位置参数不碰;web 排除(上游原生 web 子命令已等价 boot
       # profiles.web)。撞上游子命令(eval 期 throw,名单自动提取):
@@ -429,6 +499,8 @@ let
       set -euo pipefail
       export DSH_HOME="${cfg.dshHome}"
       ${envPrelude}
+      dsh_home="${cfg.dshHome}"
+      ${secretPrelude}
       ${settingsPrelude}
       ${faceDispatch}
       ${profilePrelude}
@@ -565,10 +637,11 @@ let
           cfg.inBoxPlugins;
       # MCP 服务器行(rc.5 dsh-mcp-client 实测):插件不在默认树,每 server
       # 一行;config 判别联合由 transport 定形。null/空省略;settings 逃生口
-      # 最后并(reconnect 等未 typed 字段)
-      mcpPatches =
-        mapAttrsToList
-          (name: m:
+      # 最后并(reconnect 等未 typed 字段)。env/headers 值支持 secretFile
+      # 形态 → 占位符渲染(见 renderSecretVal),refs 收集给 wrapper 注入
+      mcpSecret =
+        let
+          renderServer = name: m:
             let
               common = { inherit (m) transport; serverName = name; }
                 // (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
@@ -586,21 +659,49 @@ let
                 else
                   lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
                     url = m.url or null;
-                    headers = m.headers or { };
-                  };
+                      headers = m.headers or { };
+                    };
             in
             {
               id = "mcp-${name}";
               name = "@deepseek-ai/dsh-mcp-client";
               config = common // body;
-            })
-          (cfg.mcpServers or { });
+            };
+          renderedServers = mapAttrs renderServer (cfg.mcpServers or { });
+          # env/headers 二次渲染为占位符,同时收集 refs
+          withSecrets = mapAttrs
+            (name: row:
+              let
+                env' = if row.config ? env then (renderSecretAttrs row.config.env).data else { };
+                headers' = if row.config ? headers then (renderSecretAttrs row.config.headers).data else { };
+                allRefs =
+                  (if row.config ? env then (renderSecretAttrs row.config.env).refs else [ ])
+                  ++ (if row.config ? headers then (renderSecretAttrs row.config.headers).refs else [ ]);
+              in
+              {
+                row = row // {
+                  config = removeAttrs row.config [ "env" "headers" ]
+                    // (optionalAttrs (env' != { }) { env = env'; })
+                    // (optionalAttrs (headers' != { }) { headers = headers'; });
+                };
+                refs = allRefs;
+              })
+            renderedServers;
+        in
+        {
+          rows = attrValues (mapAttrs (_: w: w.row) withSecrets);
+          refs = lib.unique (concatMap (w: w.refs) (attrValues withSecrets));
+        };
+      mcpPatches = mcpSecret.rows;
+      mcpSecretRefs = mcpSecret.refs;
     in
     {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜出)
       inherit inBoxPatches;
       # MCP 服务器行(同样全局,追加在 in-box 行之后)
       mcpPatches = mcpPatches;
+      # secret 占位符引用的文件路径清单(wrapper 注入块消费)
+      inherit mcpSecretRefs;
       # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
       inherit facePlugins;
       # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
