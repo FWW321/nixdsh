@@ -435,8 +435,10 @@ let
           else if registryLookup name != null then dshFaceOf (registryLookup name)
           else null;
       # 最终 face 名:null = 非交互面;false = 显式压制(registry 标记的
-      # face 当功能插件用)→ 也归 null;true = 从 attr 键派生(module system
-      # 键唯一 → 无碰撞);字符串 = 具体名。faceOf 之后只剩 null|true|str
+      # face 当功能插件用)→ 也归 null;true = 从 attr 键派生(剥一次
+      # "dsh-" 前缀,免 `dsh dsh-tui` 冗余子命令 —— cargo cargo-xx 惯例;
+      # 字符串 face 与 registry 元数据不动:前者尊重显式,后者收录时
+      # 已是人审终名);字符串 = 具体名。faceOf 之后只剩 null|true|str
       faceOf = name: p:
         let f = deriveFace name p; in
         if f == false then null else f;
@@ -445,13 +447,13 @@ let
           enabled = lib.filterAttrs (name: p: p.enable && faceOf name p != null) cfg.plugins;
           faceName = name: p:
             let f = faceOf name p; in
-            if f == true then name else f;
+            if f == true then lib.removePrefix "dsh-" name else f;
           faceNames = lib.attrValues (lib.mapAttrs faceName enabled);
           _dupAssert =
             if builtins.length faceNames != builtins.length (lib.unique faceNames) then
               throw "programs.dsh.plugins: duplicate face names (${concatStringsSep ", " faceNames})"
             else if any (f: !validFace f) faceNames then
-              throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and dsh-<face> wrapper name"
+              throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and the dsh <face> subcommand name"
             else null;
           gen = lib.mapAttrs'
             (name: p:

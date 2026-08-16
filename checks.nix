@@ -80,6 +80,16 @@ let
               patches = [ ];
               patchId = null;
             };
+            # face=true + dsh- 前缀键名:剥前缀派生(免 dsh dsh-desktop 冗余)
+            "dsh-desktop" = {
+              enable = true;
+              face = true;
+              source = "@deepseek-ai/dsh-headless";
+              profiles = [ ];
+              settings = { };
+              patches = [ ];
+              patchId = null;
+            };
           };
           inBoxPlugins = { };
         };
@@ -124,6 +134,8 @@ let
         (assert' (r.facePlugins ? my-desktop) "dsh-face-gen: face=true must derive attr key name")
         (assert' (!r.facePlugins ? rotator) "dsh-face-gen: face=false must suppress to function plugin")
         (assert' (r.facePlugins ? tui) "dsh-face-gen: zero-source registry lookup must derive face 'tui' from passthru.dshFace")
+        (assert' (r.facePlugins ? desktop) "dsh-face-gen: face=true must strip dsh- prefix from attr key")
+        (assert' (!r.facePlugins ? "dsh-desktop") "dsh-face-gen: stripped face must replace the prefixed key name")
         (assert' (r.perProfile ? web && r.perProfile ? my-desktop)
           "dsh-face-gen: perProfile must cover auto faces")
         (assert' (builtins.length r.perProfile.web.extraPlugins == 1)
