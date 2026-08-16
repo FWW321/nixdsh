@@ -601,11 +601,14 @@ let
           # 属上游 per-face 行为而非冲突)
           _usageAssert =
             let
-              inbox = id: (cfg.inBoxPlugins or { }).${id} or { enable = null; };
+              # 注意括号:`inbox "x".enable` 会被解析为 `inbox ("x".enable)`
+              # —— 对字符串取属性,正是 "expected a set but found a string"
+              skillProvider = inbox "skill-filesystem";
+              presetRoster = inbox "agent-presets";
             in
-            if (cfg.skills or { }) != { } && inbox "skill-filesystem".enable == false then
+            if (cfg.skills or { }) != { } && skillProvider.enable == false then
               throw "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider"
-            else if (cfg.presets or { }) != { } && inbox "agent-presets".enable == false then
+            else if (cfg.presets or { }) != { } && presetRoster.enable == false then
               throw "programs.dsh: presets are declared but inBoxPlugins.agent-presets.enable = false — the preset roster is disabled; remove the presets or re-enable the roster"
             else null;
           gen = lib.mapAttrs'
