@@ -182,7 +182,8 @@ let
   # 按 provider 深合并,免重启);typed 条目逐 provider 覆盖 freeform 同名
   # 条目;defaultModel 渲染进 agent-default-model 段(schema 实测于源码)
   renderSettings =
-    { settings, telemetry, providers ? { }, defaultModel ? null }:
+    { settings, telemetry, providers ? { }, defaultModel ? null
+    , webSearch ? null, llmDeepseek ? null }:
     let
       # 省略 null/空的字段;settings 逃生口最后并(未 typed 字段直通)。
       # `or` 缺省:renderSettings 可脱离 module system 直接调用(checks/测试)
@@ -213,6 +214,12 @@ let
         }) // (p.settings or { });
       nsBase = settings.llm-pi-ai or { };
       freeformProviders = nsBase.providers or { };
+      # 配置承载型三态的 settings 侧:{}(启用零配置)不出段 —— 段空
+      # 即上游默认;attrs 出段(yq merge 叠在树上);null 在 patch 层
+      # 禁行,与 settings 无涉
+      sectionIf = ns: attrs:
+        if attrs == null || attrs == { } then { }
+        else { ${ns} = (settings.${ns} or { }) // attrs; };
     in
     settings
     // (
@@ -221,7 +228,7 @@ let
       }
     )
     // (
-      if providers == { } then { } else {
+      if providers == null || providers == { } then { } else {
         "llm-pi-ai" = nsBase // {
           providers = freeformProviders // (mapAttrs (k: renderProvider k) providers);
         };
@@ -235,7 +242,9 @@ let
             reasoningEffort = defaultModel.reasoningEffort or null;
           });
       }
-    );
+    )
+    // (sectionIf "web-search-deepseek" webSearch)
+    // (sectionIf "llm-deepseek" llmDeepseek);
 
   # 上游 CLI 子命令集(自动):commander 在 bin.js 的注册模式
   # program.command("<name>")。上游加子命令自动进保留集;
@@ -377,9 +386,12 @@ let
     }:
     let
       effectiveProfile = if fixedProfile != null then fixedProfile else cfg.defaultProfile;
+      # webSearch/llmDeepseek 不随 inherit:renderSettings 缺省 null,
+      # stub cfg(无该键)与真实 cfg(默认 null)等价;显式 attrs 时模块
+      # 系统保证键存在,inherit (cfg) 反而会炸 stub 调用方
       settingsJSON =
-        if renderSettings { inherit (cfg) settings telemetry providers defaultModel; } == { } then null
-        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers defaultModel; });
+        if renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; llmDeepseek = cfg.llmDeepseek or null; } == { } then null
+        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; llmDeepseek = cfg.llmDeepseek or null; });
       settingsPrelude = optionalString (settingsJSON != null) ''
         dsh_home="''${DSH_HOME:-$HOME/.dsh}"
 
@@ -594,23 +606,53 @@ let
             else if any (f: !validFace f) faceNames then
               throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and the dsh <face> subcommand name"
             else null;
-          # 依赖冲突:skills/presets 的发现插件在 base 树默认启用,显式
-          # disable 会让物化文件无人消费 —— 静默失效比报错更糟,eval 期
-          # fail-loud。(MCP 插件随 insert 行自带,无此冲突;presets 的
-          # roster 行只在 tui/web 树存在,headless 本就无 preset 语义,
-          # 属上游 per-face 行为而非冲突)
-          _usageAssert =
-            let
-              inbox = id: (cfg.inBoxPlugins or { }).${id} or { enable = null; };
-              # 中间绑定而非 `inbox "x".enable` 直连:避免选择器解析歧义
-              skillProvider = inbox "skill-filesystem";
-              presetRoster = inbox "agent-presets";
-            in
-            if (cfg.skills or { }) != { } && skillProvider.enable == false then
-              throw "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider"
-            else if (cfg.presets or { }) != { } && presetRoster.enable == false then
-              throw "programs.dsh: presets are declared but inBoxPlugins.agent-presets.enable = false — the preset roster is disabled; remove the presets or re-enable the roster"
-            else null;
+           # 依赖冲突:skills/presets 的发现插件在 base 树默认启用,显式
+           # disable 会让物化文件无人消费 —— 静默失效比报错更糟,eval 期
+           # fail-loud。(MCP 插件随 insert 行自带,无此冲突;presets 的
+           # roster 行只在 tui/web 树存在,headless 本就无 preset 语义,
+           # 属上游 per-face 行为而非冲突)
+           # 三态 typed 选项 × inBoxPlugins 同组 id 显式对着干 → 同理
+           # fail-loud(typed 层与用户层会产出语义冲突的行组)
+           _usageAssert =
+             let
+               inbox = id: (cfg.inBoxPlugins or { }).${id} or { enable = null; };
+               # 中间绑定而非 `inbox "x".enable` 直连:避免选择器解析歧义
+               skillProvider = inbox "skill-filesystem";
+               presetRoster = inbox "agent-presets";
+               wsNull = (cfg.webSearch or null) == null;
+               dshNull = (cfg.llmDeepseek or null) == null;
+               piAiNull = (cfg.providers or { }) == null;
+               # typed 启用(非 null)但 inBoxPlugins 显式禁同组行
+               wsClash =
+                !wsNull && (inbox "web").enable == false
+                || !wsNull && (inbox "web-search-deepseek").enable == false
+                || !wsNull && (inbox "tool-web").enable == false;
+               dshClash = !dshNull && (inbox "llm-deepseek").enable == false;
+               piAiClash = piAiNull && (inbox "llm-pi-ai").enable == false;
+               # typed 禁用(null)但配置仍指向它 —— 意图自相矛盾。
+               # 注意:defaultModel.provider 无法 eval 期判归属(pi-ai
+               # catalog 路由名与 llm-deepseek id "deepseek-official"
+               # 无先验区分,不猜) —— 只查可判定的 settings 声明;
+               # 唯一可靠例外是 deepseek-official(llm-deepseek 固定 id)
+               piAiOrphan = piAiNull && (cfg.settings or { }) ? "llm-pi-ai";
+               dshOrphan = dshNull && (cfg.defaultModel or null) != null
+                 && cfg.defaultModel.provider == "deepseek-official";
+             in
+             if (cfg.skills or { }) != { } && skillProvider.enable == false then
+               throw "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider"
+             else if (cfg.presets or { }) != { } && presetRoster.enable == false then
+               throw "programs.dsh: presets are declared but inBoxPlugins.agent-presets.enable = false — the preset roster is disabled; remove the presets or re-enable the roster"
+             else if wsClash then
+               throw "programs.dsh: webSearch is set but inBoxPlugins disables one of web/web-search-deepseek/tool-web — use webSearch alone (null disables all three rows)"
+             else if dshClash then
+               throw "programs.dsh: llmDeepseek is set but inBoxPlugins.\"llm-deepseek\".enable = false — use llmDeepseek alone (null disables the row)"
+             else if piAiClash then
+               throw "programs.dsh: providers = null but inBoxPlugins.\"llm-pi-ai\".enable = false is redundant — providers = null already disables the row"
+             else if piAiOrphan then
+               throw "programs.dsh: providers = null but settings.\"llm-pi-ai\" is declared (or defaultModel routes through pi-ai) — a disabled adapter cannot consume them; set providers = {} or drop the declarations"
+             else if dshOrphan then
+               throw "programs.dsh: llmDeepseek = null but defaultModel.provider = \"deepseek-official\" — the default route points at a disabled adapter; enable llmDeepseek or re-route defaultModel"
+             else null;
           gen = lib.mapAttrs'
             (name: p:
               let fname = faceName name p; in
@@ -721,12 +763,36 @@ let
         };
       mcpPatches = mcpSecret.rows;
       mcpSecretRefs = mcpSecret.refs;
+       # 配置承载型三态的 patch 侧:仅 null 出 disable 行(启用走 settings
+       # 段 + 树自带行,{}/attrs 无行);行组 = 能力的全部独立行(webSearch
+       # 三行,README 已知限制:preset 内 tool-web patch 层不可达)。
+       # 追加在 inBoxPatches 之后,同 id 后行胜出(与用户层同写一行时,
+       # _usageAssert 已拦显式冲突;顺带的 enable=null 不表态无冲突)
+       # ⚠ 选中才启用(未选中后端出 disable 行)的前提:provider 切换在
+       # 上游是**行级变化**(dsh-web 源码实证:WebRuntime 无 settings
+       # 命名空间,searchProvider 是行 Config,构造器一次性定格,env
+       # DSH_WEB_SEARCH_PROVIDER 也仅 boot 读)——声明并在场但未选中
+       # 只会留死卡,禁行无运行时代价。若上游将来把选择 id 接进 settings
+       # 热重载(即可运行时切换),此策略应改为"声明即在,选择器热切",
+       # 本行组随之收敛为能力骨架行(web/tool-web)。
+       capabilityPatches =
+        (lib.optionals ((cfg.webSearch or null) == null)
+          [ { id = "web"; disabled = true; }
+            { id = "web-search-deepseek"; disabled = true; }
+            { id = "tool-web"; disabled = true; }
+          ])
+        ++ (lib.optionals ((cfg.llmDeepseek or null) == null)
+          [ { id = "llm-deepseek"; disabled = true; } ])
+        ++ (lib.optionals ((cfg.providers or { }) == null)
+          [ { id = "llm-pi-ai"; disabled = true; } ]);
     in
     {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜出)
       inherit inBoxPatches;
       # MCP 服务器行(同样全局,追加在 in-box 行之后)
       mcpPatches = mcpPatches;
+      # 三态 typed 选项的 null disable 行组(追加在 in-box 行之后)
+      inherit capabilityPatches;
       # secret 占位符引用的文件路径清单(wrapper 注入块消费)
       inherit mcpSecretRefs;
       # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
@@ -743,6 +809,7 @@ let
               (concatMap (c: c.patches)
                 (filter (c: builtins.elem profileName c.profiles) contributions))
               ++ inBoxPatches
+              ++ capabilityPatches
               ++ mcpPatches;
           })
           allProfileNames);

@@ -187,8 +187,111 @@ let
       (pkgs.lib.assertMsg (!has "web-search-deepseek") "inBoxPlugins: null enable must emit no row")
       (pkgs.lib.assertMsg (asSet."llm-deepseek".disabled == true) "inBoxPlugins: enable=false must set disabled=true")
       (pkgs.lib.assertMsg (asSet.hmr.disabled == false) "inBoxPlugins: enable=true must set disabled=false")
-      (pkgs.lib.assertMsg (asSet.timer.config.timeoutMs == 30000) "inBoxPlugins: config must render")
+       (pkgs.lib.assertMsg (asSet.timer.config.timeoutMs == 30000) "inBoxPlugins: config must render")
+     ]) "touch $out");
+
+  # 三态 typed 选项(webSearch/llmDeepseek/providers):null 出 disable 行组、
+  # {}/attrs 零 patch 行、attrs 渲染进 settings 段、providers 默认 {} 不出行。
+  # 一个 check 遍历全部正例(测试指南:同类场景合并)
+  capabilityRows =
+    let
+      mk = cfg: (dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = ({
+          plugins = { };
+          profiles = { default = { }; };
+          inBoxPlugins = { };
+        } // cfg);
+      });
+      # 默认(webSearch/llmDeepseek null,providers 缺省 {})→ 两行组
+      # (webSearch 三行 + llm-deepseek);providers 默认 {} = 启用·惰性,无行
+      defaults = (mk { }).capabilityPatches;
+      # providers 显式 null → 追加 llm-pi-ai 行
+      piAiOff = (mk { providers = null; }).capabilityPatches;
+      # 显式启用 → 零 patch 行
+      enabled = (mk {
+        webSearch = { };
+        llmDeepseek = { };
+        providers = { };
+      }).capabilityPatches;
+      capIds = rows: map (r: r.id) rows;
+      asSet = rows: builtins.listToAttrs (map (r: { name = r.id; value = r; }) rows);
+      # settings 侧:attrs 渲染进命名空间段,{} 不出段
+      st = dshLib.renderSettings {
+        settings = { };
+        telemetry = { mode = null; };
+        webSearch = { maxUses = 3; };
+        llmDeepseek = { thinking = "enabled"; };
+        providers = { };
+        defaultModel = null;
+      };
+      stEmpty = dshLib.renderSettings {
+        settings = { };
+        telemetry = { mode = null; };
+        webSearch = { };
+        llmDeepseek = { };
+        providers = { };
+        defaultModel = null;
+      };
+    in
+    pkgs.runCommand "dsh-capability-rows-check" { } (builtins.deepSeq ([
+      (pkgs.lib.assertMsg (capIds defaults == [ "web" "web-search-deepseek" "tool-web" "llm-deepseek" ])
+        "capability: defaults must emit webSearch 3 rows + llm-deepseek 1 (providers default {} stays enabled, no row)")
+      (pkgs.lib.assertMsg (capIds piAiOff == [ "web" "web-search-deepseek" "tool-web" "llm-deepseek" "llm-pi-ai" ])
+        "capability: providers = null must add the llm-pi-ai disable row")
+      (pkgs.lib.assertMsg (builtins.all (r: r.disabled == true) piAiOff)
+        "capability: emitted rows must all carry disabled=true")
+      (pkgs.lib.assertMsg (enabled == [ ])
+        "capability: enabled ({} or attrs) must emit zero patch rows — the tree rows stand")
+      (pkgs.lib.assertMsg (st ? "web-search-deepseek" && st."web-search-deepseek".maxUses == 3)
+        "capability: webSearch attrs must render into settings.\"web-search-deepseek\"")
+      (pkgs.lib.assertMsg (st ? "llm-deepseek" && st."llm-deepseek".thinking == "enabled")
+        "capability: llmDeepseek attrs must render into settings.\"llm-deepseek\"")
+      (pkgs.lib.assertMsg (stEmpty == { })
+        "capability: {} (enabled, zero config) must render no settings section")
     ]) "touch $out");
+
+  # 三态负例:typed 选项 × inBoxPlugins 显式冲突 / providers=null × settings
+  # 声明 / llmDeepseek=null × defaultModel 指向 deepseek-official → eval throw。
+  # tryEval 只到 WHNF,throw 在 applyPlugins 内部 → deepSeq 强制(实测先例)
+  capabilityClash =
+    let
+      tryThrow = f: msg:
+        let res = builtins.tryEval (builtins.deepSeq (f { }) null);
+        in pkgs.lib.assertMsg (!res.success) msg;
+      mkApply = cfg: dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = ({
+          plugins = { };
+          profiles = { default = { }; };
+        } // cfg);
+      };
+    in
+    pkgs.runCommand "dsh-capability-clash-check" { } (builtins.seq ([
+      (tryThrow (mkApply {
+        webSearch = { };
+        inBoxPlugins."web-search-deepseek".enable = false;
+      }) "capability: webSearch set + inBoxPlugins disabling provider row must throw")
+      (tryThrow (mkApply {
+        webSearch = { };
+        inBoxPlugins."tool-web".enable = false;
+      }) "capability: webSearch set + inBoxPlugins disabling tool row must throw")
+      (tryThrow (mkApply {
+        llmDeepseek = { };
+        inBoxPlugins."llm-deepseek".enable = false;
+      }) "capability: llmDeepseek set + inBoxPlugins disable must throw")
+      (tryThrow (mkApply {
+        providers = null;
+        settings."llm-pi-ai".foo = 1;
+      }) "capability: providers=null + settings.llm-pi-ai declared must throw")
+      (tryThrow (mkApply {
+        llmDeepseek = null;
+        webSearch = null;
+        providers = { };
+        defaultModel = { provider = "deepseek-official"; model = "deepseek-v4-pro"; };
+      }) "capability: llmDeepseek=null + defaultModel → deepseek-official must throw")
+    ]) "touch $out");
+
 
   # 物化 bundle 到 scratch DSH_HOME(dsh boot 会改写 profile 根 cordis.yml,须可写副本)
   materialize = name: bundle: ''
@@ -202,6 +305,8 @@ in
 {
   dsh-face-gen = dsh-face-gen;
   dsh-inbox-rows = inBoxRows;
+  dsh-capability-rows = capabilityRows;
+  dsh-capability-clash = capabilityClash;
   dsh-profile-structure = pkgs.runCommand "dsh-profile-structure-check"
     { nativeBuildInputs = [ pkgs.jq ]; } ''
       bundle=${goodProfile}

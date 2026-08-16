@@ -211,13 +211,44 @@ catalog(v4-flash/pro)无条件注册、无 key 即死 UI 条目 → 默认 `null
 (默认仍 `{}`,非破坏)即 pi-ai 的三态载体,`providers = null` × 非空
 载荷声明 → 求值期 fail-loud(同 skills × disable 先例)。
 
+**"声明即启用"精确化:声明必有效(在场,或被选择器解释)**。有选择器
+的注册表类选项(选择器形态,如 `providers`+`defaultModel`、
+`webSearch`+`webSearchProviders`)允许"声明 + 未选中"共存 —— 备案
+待命不是矛盾;无选择器的载荷声明(mcpServers/skills/presets)仍是
+声明即启用,配了又被禁 = 矛盾,fail-loud。两例对照:LLM 侧未选中
+provider 全注册(模型可手切,活备选);webSearch 侧仅选中者启用
+(web 搜索无切换面,未选中 = 死卡 → 禁行)。⚠ 后者的前提是上游
+**无运行时 provider 切换**(dsh-web 实证:`searchProvider` 是行
+Config 非命名空间段,构造器定格)—— 若上游将来支持热切,该策略
+改为"声明即在,选择器热切"(lib.nix capabilityPatches 注释有同步
+标记)。
+
+**可见性规则:每个 UI 面跟随拥有它的行**(实测 rc.6)。禁用一个行后,
+哪些面消失取决于"谁拥有那个面":
+
+| UI 面 | 拥有者行 | 行禁用后 |
+|---|---|---|
+| 设置页插件卡(Web Plugins 页) | provider 自己(其 `apply()` 安装的 settings 命名空间) | **消失**(命名空间没装,`ui-settings-plugins` 原话:"A namespace this deployment does not expose renders nothing") |
+| 模型面工具 schema(`web_search` 等) | tool 行(tool-web `apply()` 只看自身 config,无条件注册) | **仍在**("稳定注册"),调用时报错 |
+| 模型选择器条目 | llm adapter 行(注册时展开 catalog) | 消失 |
+
+所以"未声明=禁用"的收益按面盘点:禁 provider = 设置卡消失 + 调用必败;
+禁 tool = 模型面工具与指引 token 归零。只禁 provider 不禁 tool 会留下
+"看得见调不通"的工具(调用报 `WEB_PROVIDER_CONFIGURED_MISSING` —— base
+的 `web` 行配了 `searchProvider: deepseek-official`,provider 未注册即
+此码,dsh-web resolveProvider 实测;`UNAVAILABLE` 是"已注册但
+`available()` 假",另一分支)。
+
  配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
 启用必显式 —— 给配置(声明即启用)或显式 enable(为纯运行时配置留位)。
- 落地状态:`mcpServers`/`skills`/`presets` 已是此语义;路线图:
-`webSearch` / `llmDeepseek` typed 选项(默认 null)、`providers` 升级
-nullOr(pi-ai 三态化,默认 {} 保持启用)。此前由层 2 + 层 3 组合表达
-(如 `inBoxPlugins."llm-deepseek".enable = false` 即"不要 deepseek
-路由"意图暂住层 3 的形态)。
+落地状态:`mcpServers`/`skills`/`presets` 已是此语义;`webSearch` /
+`llmDeepseek` typed 选项(默认 null)与 `providers` nullOr 升级(默认
+{} 保持启用)已落地。
+
+**迁移注记**:`webSearch` 默认 null 意味着三 face 的 `web_search` 工具
+默认不再注册(base 树虽自带三行)—— 需要搜索的用户写
+`webSearch = {};`(零配置,运行时配 key)或 `webSearch = { maxUses = 3; }`
+找回。这是显式哲学的代价,明确选择不改。
 
 **已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
 rc.6)。`webSearch = null` 禁三行(`web`/`web-search-deepseek`/`tool-web`
@@ -229,10 +260,11 @@ preset(standard/code/cordis)的 `agent.cordis.yml` 各自带一份
 patch 只作用宿主树,自建同名 preset 又被 shipped root first-root-wins
 遮蔽,覆盖路线也堵死。后果:**"禁工具"意图在 web face 部分丢失** ——
 preset 里的 tool-web 漏网照常注册,`web_search` 工具卡留在 UI、schema
-token 照吃(provider 行已禁,调用报 `WEB_PROVIDER_UNAVAILABLE` 结构化
-错误 —— 这本身是上游"稳定注册"的正常设计,问题只在禁用意图没打全)。
-tui/headless 的 tool-web 是宿主树行,disable 全净。根治需上游:preset
-级配置化裁剪或 agent-presets 行级禁用(随 preset opt-out issue 一并提)。
+token 照吃(provider 行已禁,调用报 `WEB_PROVIDER_CONFIGURED_MISSING`
+结构化错误 —— 这本身是上游"稳定注册"的正常设计,问题只在禁用意图
+没打全)。tui/headless 的 tool-web 是宿主树行,disable 全净。根治需
+上游:preset 级配置化裁剪或 agent-presets 行级禁用(随 preset opt-out
+issue 一并提)。
 
 ## 入口
 

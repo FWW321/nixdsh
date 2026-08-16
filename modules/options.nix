@@ -122,6 +122,57 @@ in
       '';
     };
 
+    # ── 配置承载型 typed 选项(三态:null 禁用/{} 显式启用/attrs 配置)──
+    # 设计准则与可见性规则见 README「插件形态与通道选择」:禁用行进
+    # 所有 profile 用户 patch 层;attrs 渲染进对应 settings 命名空间段
+    # (yq merge,免重启)。默认值由空载荷代价选出。
+    webSearch = lib.mkOption {
+      # attrs = settings."web-search-deepseek" 段(键:apiKey/apiKeyEnv/
+      # baseURL/model/apiVersion/maxTokens/maxUses,schema实测 rc.6 源码);
+      # 刻意 freeform 不逐键 typed —— 上游 rc 阶段 schema 未稳
+      type = lib.types.nullOr lib.types.attrs;
+      default = null;
+      example = lib.literalExpression ''
+        {
+          maxUses = 3;   # 单次请求服务器侧搜索次数上限(默认 5)
+          # baseURL = "https://api.deepseek.com/anthropic/v1";  # 接口地址
+          # apiKeyEnv = "DEEPSEEK_API_KEY";                     # 凭证引用
+        }
+      '';
+      description = ''
+        网页搜索(DeepSeek 原生 web_search)。null(默认)= 禁用:
+        web/web-search-deepseek/tool-web 三行 disable 进所有 profile
+        (三行独立,"不要搜索能力"同覆盖 provider 与工具;base 树自带
+        三行,故默认即禁,见 README 迁移注记)。{} = 显式启用零配置
+        (key 走 export 或 Web UI Models 页运行时配)。attrs = 启用并
+        渲染进 settings."web-search-deepseek"(每次搜索按次投影,改完
+        下一次搜索即生效)。
+        已知限制:web face 的 preset 自带 tool-web,patch 层不可达 ——
+        null 时 web 会话的工具卡残留(README 已知限制节)。
+      '';
+    };
+
+    llmDeepseek = lib.mkOption {
+      # attrs = settings."llm-deepseek" 段(键:apiKeyEnv/baseURL/thinking/
+      # reasoningEffort/models/maxTokens/...,schema 实测 rc.6 源码)
+      type = lib.types.nullOr lib.types.attrs;
+      default = null;
+      example = lib.literalExpression ''
+        {
+          thinking = "enabled";
+          reasoningEffort = "max";
+        }
+      '';
+      description = ''
+        DeepSeek 官方 LLM 路由(llm-deepseek adapter)。null(默认)= 禁用:
+        DEFAULT_MODELS catalog(v4-flash/pro)无条件注册,无 key 即模型
+        选择器死条目,故默认禁(空载荷代价,见 README)。{} = 显式启用
+        零配置(key 走 export 或 Web UI 运行时配)。attrs = 启用并渲染进
+        settings."llm-deepseek"。与 providers(llm-pi-ai)不互斥:多
+        provider 注册表,路由由 defaultModel/settings 选择。
+      '';
+    };
+
     # ── LLM 供应商路由(dsh-llm-pi-ai 用户层)──────────────────────────
     # 渲染进 settings.yaml `llm-pi-ai.providers` 命名空间段(cordis 树 base
     # 配置之上的用户层,上游按 provider 逐项深合并,免重启生效)。
@@ -129,7 +180,7 @@ in
     # pi-ai catalog 持有,catalog 路由只写凭证名即可;手声明路由(如
     # zhipu coding plan 的 anthropic 兼容端点)显式给全字段。
     providers = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.submodule {
+      type = lib.types.nullOr (lib.types.attrsOf (lib.types.submodule {
         options = {
           apiKeyEnv = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
@@ -231,6 +282,12 @@ in
         (typed 覆盖 freeform settings.llm-pi-ai 同名 provider 条目)。
         与 freeform settings 的分工:这里管类型安全与缺省省略,
         settings.llm-pi-ai 仍可写本层未覆盖的任意键。
+
+        nullOr 三态(README 设计准则):{} 默认 = 启用·惰性(空载荷
+        零注册,无可观测面,禁用无收益);null = 禁用(llm-pi-ai 行
+        disable 进所有 profile,彻底走 llm-deepseek/其他 adapter 时
+        用);null × settings."llm-pi-ai" 有声明或 defaultModel 指向
+        pi-ai 路由 → 求值期 fail-loud。
       '';
     };
 
