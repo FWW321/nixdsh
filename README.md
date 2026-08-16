@@ -170,6 +170,15 @@ HM 的 `mkForce`:语义不可删除,但出现即设计缺口信号。
 模块系统结构性保证,分类无事可做(其配置随同一声明块下发,way B 的
 `plugins.<name>.settings` 即"声明即启用"同款)。
 
+**多源行是常态,判据与禁用机制均来源无关**。同一行 id 可同时存在于
+多棵树(实测 rc.6:`llm-deepseek` 在 dsh-base/cordis.patch.yml:450 有一
+份中性默认,在 dsh-tui/cordis.yml:73 又有一份强意见默认 ——
+`thinking: enabled` + `reasoningEffort: max`;TUI 自带独立树、不建立在
+dsh-base 上,必须自带全套运行时行)。行归属哪个包无关紧要,判据只看
+"这行是否未经你的声明就在树上"。因此 `inBoxPlugins` 的禁用行进**所有
+profile** 的用户 patch 层:两棵树里的同 id 行都被翻掉,没有该行的树
+warn+skip —— 一行声明天然覆盖多源,无需 per-face 重复。
+
 配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
 启用必显式 —— 给配置(声明即启用)或显式 enable(为纯运行时配置留位)。
 落地状态:`mcpServers`/`skills`/`presets` 已是此语义;`webSearch` /
