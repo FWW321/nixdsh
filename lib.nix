@@ -20,6 +20,7 @@
 
 let
   inherit (lib)
+    any
     attrNames
     attrValues
     concatMap
@@ -304,7 +305,11 @@ let
         else throw "programs.dsh.plugins.${name}: no source given and '${name}' not in pkgs.dshPlugins (add it to plugins/names.txt and run the updater, or set source)";
       # 交互面插件 → 自动 profile(base + 本源)。face 插件互斥不参与分发
       # (进其他树 = duplicate entry / TTY 致死,均实测),功能插件分发到
-      # 所有 face(profiles = [] 缺省语义含自动生成的 face)
+      # 所有 face(profiles = [] 缺省语义含自动生成的 face)。
+      # face 名约束 kebab-case:它被拼进文件路径($DSH_HOME/profiles/<face>)
+      # 与 wrapper 名(dsh-<face>),同上游 settingsNamespace 的模式
+      validFace = f:
+        builtins.match "[a-z][a-z0-9]*(-[a-z0-9]+)*" f != null;
       facePlugins =
         let
           enabled = lib.filterAttrs (_: p: p.enable && p.face != null) cfg.plugins;
@@ -313,6 +318,8 @@ let
           _dupAssert =
             if builtins.length faceNames != builtins.length (lib.unique faceNames) then
               throw "programs.dsh.plugins: duplicate face names (${concatStringsSep ", " faceNames})"
+            else if any (f: !validFace f) faceNames then
+              throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and dsh-<face> wrapper name"
             else null;
           gen = lib.mapAttrs'
             (name: p:
