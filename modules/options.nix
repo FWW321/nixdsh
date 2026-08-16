@@ -653,9 +653,16 @@ in
       type = lib.types.attrsOf (lib.types.submodule {
         options = {
           source = lib.mkOption {
-            type = lib.types.path;
+            # path(仓库内目录)/ string(store 路径或插值)/ derivation
+            # (dshPlugins 产物)—— toString 归一后在 validatePresets/
+            # buildPreset 统一消费
+            type = lib.types.path // {
+              check = v: builtins.isPath v || builtins.isString v || lib.isDerivation v;
+              description = "path or string (store path / interpolated source)";
+            };
             description = ''
-              预设目录(path 到仓库内),须含 agent.cordis.yml
+              预设目录(path 到仓库内,或 store 路径字符串如
+              ''${pkgs.dsh}/config/agent-presets/standard),须含 agent.cordis.yml
               (可选 preset.yml 元数据与 .mjs 插件文件)。
               推荐工作流:TUI 创造模式做原型 → cp 进本仓库 → 此处声明
               (声明即接管:activation 物化覆盖同名目录,含创造模式
