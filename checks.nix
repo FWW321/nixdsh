@@ -370,8 +370,54 @@ let
       touch $out
     '';
 
+  # zhipu 后端端到端(同 exa 同构):选中 zhipu 的 profile 真 boot,
+  # web-search-zhipu 条目进树 + web 行 searchProvider 重述生效。
+  # registry 真包构建(peers 回链)→ 全链验证(构建级)
+  dsh-zhipu-in-tree =
+    let
+      applied = dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          plugins = { };
+          profiles = { default = { }; };
+          inBoxPlugins = { };
+          webSearch = "zhipu";
+          webSearchProviders.zhipu = {
+            row = {
+              name = "@fww/dsh-web-search-zhipu";
+              config.apiKeyEnv = "ZHIPU_API_KEY";
+            };
+          };
+        };
+      };
+      inc = applied.perProfile.default;
+      bundle = dshLib.buildProfile {
+        inherit pkgs;
+        profile = dshLib.mkProfile {
+          name = "zhipu-tree";
+          plugins = [ "@deepseek-ai/dsh-base" ] ++ inc.extraPlugins;
+          userPatchesFile = null;
+          userPatches = inc.extraPatches;
+        };
+      };
+    in
+    pkgs.runCommand "dsh-zhipu-in-tree-check" { } ''
+      ${materialize "zhipu-tree" bundle}
+      ${pkgs.dsh}/bin/dsh --profile zhipu-tree --dump-config > "$TMPDIR/dump.log" 2>&1 \
+        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      grep -q 'web-search-zhipu' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "web-search-zhipu entry missing from composed tree" >&2; exit 1;
+      }
+      ! grep -q 'entry "web-search-zhipu" not found' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "web-search-zhipu row was warn-skipped (patch shape, not insert)" >&2; exit 1;
+      }
+      grep -q 'zhipu' "$TMPDIR/dump.log" && grep -q 'searchProvider' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "web row searchProvider=zhipu restatement missing" >&2; exit 1;
+      }
+      touch $out
+    '';
 
-  # 物化 bundle 到 scratch DSH_HOME(dsh boot 会改写 profile 根 cordis.yml,须可写副本)
+
   materialize = name: bundle: ''
     home="$TMPDIR/dsh-home"
     mkdir -p "$home/profiles"
@@ -386,6 +432,7 @@ in
   dsh-capability-rows = capabilityRows;
   dsh-capability-clash = capabilityClash;
   dsh-exa-in-tree = dsh-exa-in-tree;
+  dsh-zhipu-in-tree = dsh-zhipu-in-tree;
   dsh-profile-structure = pkgs.runCommand "dsh-profile-structure-check"
     { nativeBuildInputs = [ pkgs.jq ]; } ''
       bundle=${goodProfile}

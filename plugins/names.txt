@@ -13,3 +13,4 @@
 01Virex/dsh-status-rotator
 ccch1mneyyy/dsh-TUI face=tui
 TonyDua/dsh-web-search-exa
+FWW321/dsh-web-search-zhipu
