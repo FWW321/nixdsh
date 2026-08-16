@@ -65,8 +65,8 @@ let
   # agent 预设:build 期重放能力行组(单一事实源 applied;行组增删改 →
   # 产物路径变 → stamp 重物化,删除自动清理)+ 剥 tui marker(所有权归
   # 声明方,ensurePackagedPresets 视无 marker 目录为 conflict 永不碰)。
-  # 双源合流:显式 presets.<name> 声明 + 插件源自动发现(passthru.dshPresets/
-  # 直扫;显式声明胜 —— "声明即接管" 先例)。
+  # 双源合流:插件源自动发现(applied.discoveredPresets,经 sourceOf
+  # 解析链 —— 零 source 插件也发现)+ 显式 presets.<name> 声明(胜)。
   # 校验在 lib.validatePresets(eval 期 fail-loud);stamp 语义同 profile
   # (声明名 Nix 拥有,物化覆盖创造模式迭代版 —— 声明即接管)。
   # ⚠ 能力行被 preset 层遮蔽的根因与 retiring 条件见 lib/preset.nix 注记
@@ -76,7 +76,7 @@ let
       source = src;
       rows = applied.wfRows ++ applied.wsProviderRows ++ applied.wsSelectorRow;
     })
-    (dshLib.discoverPresets { inherit cfg pkgs; }
+    (applied.discoveredPresets
       // (dshLib.validatePresets cfg.presets));
   # skills:validateSkills 校验 + 相对目标名(文件 → <名>.md / 目录 → <名>)
   skillSources = dshLib.validateSkills cfg.skills;

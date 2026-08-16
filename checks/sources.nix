@@ -173,8 +173,8 @@ in
       (assert' (!presetClash.success) "dsh-skills: presets + agent-presets disabled must throw at eval time")
     ]) "touch $out");
 
-  # preset 自动发现:derivation 源(passthru.dshPresets)+ path 源(直扫
-  # presets/)+ 显式声明胜 + shipped preset 助手(布局漂移 fail-loud)
+  # preset 自动发现:经 applyPlugins(与生产同构,零 source 插件走
+  # sourceOf 解析)+ path 源直扫 + 显式声明胜 + shipped 助手 fail-loud
   dsh-preset-discover =
     let
       # path 源夹具:真 Nix path(flake=false input 形态),含
@@ -189,33 +189,17 @@ in
         echo "- id: tool-web" > $out/presets/shipped-one/agent.cordis.yml
       '';
       noPresetSrc = pkgs.hello;
-      base = {
-        plugins = { };
-        profiles = { default = { }; };
-        inBoxPlugins = { };
-      };
-      found = dshLib.discoverPresets {
-        inherit pkgs;
-        cfg = base // {
-          plugins = {
-            a = { enable = true; source = pathSrc; };
-            b = { enable = false; source = derivSrc; };  # disabled → 不发现
-            c = { enable = true; source = noPresetSrc; }; # 无 preset → 空贡献
-          };
-        };
+      # 生产路径:applyPlugins(sourceOf 解析链)
+      applyDiscover = plugins: (applyWith { inherit plugins; }).discoveredPresets;
+      found = applyDiscover {
+        a = { enable = true; source = pathSrc; };
+        b = { enable = false; source = derivSrc; };  # disabled → 不发现
+        c = { enable = true; source = noPresetSrc; }; # 无 preset → 空贡献
       };
       # passthru 源单独验(上面 b disabled)
-      foundDeriv = dshLib.discoverPresets {
-        inherit pkgs;
-        cfg = base // { plugins.b = { enable = true; source = derivSrc; }; };
-      };
-      # 显式声明胜:同名 found 源被显式 presets 覆盖(hm-module 合流序)
-      merged = dshLib.discoverPresets {
-        inherit pkgs;
-        cfg = base // {
-          plugins.a = { enable = true; source = pathSrc; };
-        };
-      } // { handmade = "/explicit/wins"; };
+      foundDeriv = applyDiscover { b = { enable = true; source = derivSrc; }; };
+      # 显式声明胜:同名发现源被显式 presets 覆盖(hm-module 合流序)
+      merged = found // { handmade = "/explicit/wins"; };
       assert' = c: m: pkgs.lib.assertMsg c m;
     in
     pkgs.runCommand "dsh-preset-discover-check" { } (builtins.deepSeq ([

@@ -71,7 +71,6 @@ in
     ;
   inherit (preset)
     buildPreset
-    discoverPresets
     shippedPreset
     ;
 }

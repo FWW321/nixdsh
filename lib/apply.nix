@@ -430,6 +430,45 @@ let
            else [ (registryLookup sel.rowId) ]);
       # fetch 缝行组(未选中禁行 + 选中 insert/选择器/保险丝)
       wfRows = wfDisableRows ++ wfProviderRows;
+
+      # ── preset 自动发现(插件托管 preset,liangshen 形态)─────────────
+      # enabled 插件经 sourceOf 解析后的源(source null 的零 source 插件
+      # 也在解析后拿到 registry derivation):passthru.dshPresets(registry,
+      # update.py 收录时探测物化)/ 直扫 presets/ 目录(path 源)。
+      # 发现即接管 —— 物化剥 tui marker 后 ensurePackagedPresets 视为
+      # conflict 永不碰;插件 disable → 孤儿清理随动。用户显式
+      # presets.<name> 声明与发现撞名 → 显式胜(声明即接管先例,
+      # 合流在 hm-module 侧:discovered // declared)
+      discoveredPresets =
+        let
+          scanSrc = src:
+            if builtins.isPath src then
+              (if builtins.pathExists "${toString src}/presets" then
+                listToAttrs (map
+                  (id: { name = id; value = "${toString src}/presets/${id}"; })
+                  (filter
+                    (id: builtins.pathExists "${toString src}/presets/${id}/agent.cordis.yml"
+                      && builtins.readFileType "${toString src}/presets/${id}" == "directory")
+                    (attrNames (builtins.readDir "${toString src}/presets"))))
+              else { })
+            else if lib.isDerivation src && (src.passthru or { }) ? dshPresets then
+              listToAttrs (map
+                (id: { name = id; value = "${toString src}/presets/${id}"; })
+                src.passthru.dshPresets)
+            else { };
+        in
+        # tryEval:sourceOf 对未知插件 throw(与插件分发同语义),发现面
+        # 不放大 —— 单个插件源解析失败不影响其余(该错误在分发路径已
+        # fail-loud,这里不必重复炸)
+        builtins.foldl'
+          (acc: name:
+            let p = cfg.plugins.${name}; in
+            if !p.enable then acc
+            else
+              let r = builtins.tryEval (sourceOf name p); in
+              if r.success then acc // (scanSrc r.value) else acc)
+          { }
+          (attrNames cfg.plugins);
     in
     {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜过)
@@ -442,6 +481,8 @@ let
       inherit mcpSecretRefs;
       # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
       inherit facePlugins;
+      # 插件源自动发现的 preset(显式声明合流在消费侧,显式胜)
+      inherit discoveredPresets;
       # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
       # 覆盖显式 profile 与自动 face 两类)
       perProfile = listToAttrs
