@@ -241,14 +241,42 @@ Config 非命名空间段,构造器定格)—— 若上游将来支持热切,该
 
  配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
 启用必显式 —— 给配置(声明即启用)或显式 enable(为纯运行时配置留位)。
-落地状态:`mcpServers`/`skills`/`presets` 已是此语义;`webSearch` /
-`llmDeepseek` typed 选项(默认 null)与 `providers` nullOr 升级(默认
-{} 保持启用)已落地。
+落地状态:`mcpServers`/`skills`/`presets` 已是此语义;`webSearch`(选择
+器形态)/`llmDeepseek`(默认 null)与 `providers`(nullOr,默认 {} 保持
+启用)已落地,见「网页搜索」节。
 
 **迁移注记**:`webSearch` 默认 null 意味着三 face 的 `web_search` 工具
 默认不再注册(base 树虽自带三行)—— 需要搜索的用户写
-`webSearch = {};`(零配置,运行时配 key)或 `webSearch = { maxUses = 3; }`
-找回。这是显式哲学的代价,明确选择不改。
+`webSearch = "deepseek-official";`(零配置,运行时配 key)找回。这是
+显式哲学的代价,明确选择不改。
+
+## 网页搜索
+
+`webSearch` 是**能力开关 + provider 选择器二合一**(唯一自由度:provider
+是谁;骨架行 web/tool-web 无独立旋钮 —— 启 provider 必启、禁 provider
+必禁,独立配置是假自由度)。选中才启用,未选中后端禁行(死卡清理;
+前提:上游无运行时切换,见设计准则的 ⚠ 标记)。
+
+```nix
+# DeepSeek 原生搜索(base 自带后端,零声明;key 走 export DEEPSEEK_API_KEY
+# 或 Web UI Models 页运行时配;无 key 每次搜索必败,严格模式无降级)
+programs.dsh.webSearch = "deepseek-official";
+programs.dsh.webSearchProviders."deepseek-official".maxUses = 3;  # 可选参数
+
+# Exa(社区包 @tonydua/dsh-web-search-exa,registry 收录;无 key 走
+# mcp.exa.ai 匿名兜底,零配置可用;有 key 走 REST更快)
+programs.dsh.webSearch = "exa";
+programs.dsh.webSearchProviders.exa.apiKeyEnv = "EXA_API_KEY";  # 可选
+
+# 切换后端 = 改一个字符串(两边声明都在,备案待命)
+```
+
+机制:选中 deepseek-official → 树行原样 + 参数渲染进 settings 段
+(按次投影热生效);选中 exa → deepseek 后端禁行 + exa insert 行
+(行 config 带声明参数)+ `web` 行重述 `searchProvider` + 包源进所有
+profile(exa 参数走 settings 段 "web-search-exa",@tonydua 版有命名
+空间,热改)。求值期断言:选择 id 须在声明表 ∪ {deepseek-official};
+能力禁 × 声明表非空 → throw。
 
 **已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
 rc.6)。`webSearch = null` 禁三行(`web`/`web-search-deepseek`/`tool-web`

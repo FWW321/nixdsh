@@ -127,12 +127,16 @@ let
         };
       }
       ''
+        # cp -r src/. $out:src 是只读 store 路径,`cp -r src $out` 在 $out
+        # 已存在时会拷成 $out/<basename> 嵌套(runCommand 预建 $out);
+        # cp 保留 src 的 0555 权限位,后续 linkPeers 须先恢复可写
         cp -r ${fetchFromGitHub {
           owner = e.owner;
           repo = e.repo;
           rev = e.rev;
           hash = e.hash;
-        }}${lib.optionalString (e ? subpath) "/${e.subpath}"} "$out"
+        }}${lib.optionalString (e ? subpath) "/${e.subpath}"}/. "$out"
+        chmod -R u+w "$out"
         ${lib.optionalString (hostDsh != null) (linkPeers (e.peers or [ ]))}
       '';
 in

@@ -190,8 +190,8 @@ let
        (pkgs.lib.assertMsg (asSet.timer.config.timeoutMs == 30000) "inBoxPlugins: config must render")
      ]) "touch $out");
 
-  # 三态 typed 选项(webSearch/llmDeepseek/providers):null 出 disable 行组、
-  # {}/attrs 零 patch 行、attrs 渲染进 settings 段、providers 默认 {} 不出行。
+  # webSearch 选择器形态 + 三态:默认全禁/选中 deepseek 零行/选中 exa 出
+  # provider+selector 行+包源/未选中后端禁行/settings 段按选中者渲染。
   # 一个 check 遍历全部正例(测试指南:同类场景合并)
   capabilityRows =
     let
@@ -203,56 +203,71 @@ let
           inBoxPlugins = { };
         } // cfg);
       });
-      # 默认(webSearch/llmDeepseek null,providers 缺省 {})→ 两行组
-      # (webSearch 三行 + llm-deepseek);providers 默认 {} = 启用·惰性,无行
+      # 默认(webSearch null,providers 缺省 {})→ 骨架+base 后端禁,llm-deepseek 禁
       defaults = (mk { }).capabilityPatches;
       # providers 显式 null → 追加 llm-pi-ai 行
       piAiOff = (mk { providers = null; }).capabilityPatches;
-      # 显式启用 → 零 patch 行
-      enabled = (mk {
-        webSearch = { };
-        llmDeepseek = { };
-        providers = { };
-      }).capabilityPatches;
+      # 选中 deepseek-official → 仅 llm-deepseek...不,deepseek 后端行启用,
+      # 剩 llm-deepseek(独立选项,未设)禁
+      selDeepseek = (mk { webSearch = "deepseek-official"; }).capabilityPatches;
+      # 选中 exa(声明表有)→ deepseek 后端禁 + provider/selector 行 + 包源
+      selExa = (mk {
+        webSearch = "exa";
+        webSearchProviders.exa.apiKeyEnv = "EXA_API_KEY";
+      });
+      selExaRows = selExa.capabilityPatches ++ selExa.wsProviderRows ++ selExa.wsSelectorRow;
       capIds = rows: map (r: r.id) rows;
-      asSet = rows: builtins.listToAttrs (map (r: { name = r.id; value = r; }) rows);
-      # settings 侧:attrs 渲染进命名空间段,{} 不出段
+      rowOf = rows: id: builtins.head (pkgs.lib.filter (r: r.id == id) rows);
+      # settings 侧:选中后端 attrs 渲染进对应段;无声明不出段
       st = dshLib.renderSettings {
         settings = { };
         telemetry = { mode = null; };
-        webSearch = { maxUses = 3; };
+        webSearch = "deepseek-official";
+        webSearchProviders."deepseek-official".maxUses = 3;
         llmDeepseek = { thinking = "enabled"; };
         providers = { };
         defaultModel = null;
       };
-      stEmpty = dshLib.renderSettings {
+      stExa = dshLib.renderSettings {
         settings = { };
         telemetry = { mode = null; };
-        webSearch = { };
-        llmDeepseek = { };
+        webSearch = "exa";
+        webSearchProviders.exa.numResults = 5;
+        llmDeepseek = null;
         providers = { };
         defaultModel = null;
       };
     in
     pkgs.runCommand "dsh-capability-rows-check" { } (builtins.deepSeq ([
-      (pkgs.lib.assertMsg (capIds defaults == [ "web" "web-search-deepseek" "tool-web" "llm-deepseek" ])
-        "capability: defaults must emit webSearch 3 rows + llm-deepseek 1 (providers default {} stays enabled, no row)")
-      (pkgs.lib.assertMsg (capIds piAiOff == [ "web" "web-search-deepseek" "tool-web" "llm-deepseek" "llm-pi-ai" ])
+      (pkgs.lib.assertMsg (capIds defaults == [ "web" "tool-web" "web-search-deepseek" "llm-deepseek" ])
+        "capability: defaults must emit skeleton+base-backend disable + llm-deepseek (providers default {} stays enabled)")
+      (pkgs.lib.assertMsg (capIds piAiOff == [ "web" "tool-web" "web-search-deepseek" "llm-deepseek" "llm-pi-ai" ])
         "capability: providers = null must add the llm-pi-ai disable row")
       (pkgs.lib.assertMsg (builtins.all (r: r.disabled == true) piAiOff)
         "capability: emitted rows must all carry disabled=true")
-      (pkgs.lib.assertMsg (enabled == [ ])
-        "capability: enabled ({} or attrs) must emit zero patch rows — the tree rows stand")
+      (pkgs.lib.assertMsg (capIds selDeepseek == [ "llm-deepseek" ])
+        "capability: selecting deepseek-official must emit only the independent llm-deepseek row (tree rows stand)")
+      (pkgs.lib.assertMsg (capIds selExaRows == [ "web-search-deepseek" "llm-deepseek" "web-search-exa" "web" ])
+        "capability: selecting exa must disable deepseek backend + insert exa row + restate web selector")
+      (pkgs.lib.assertMsg ((rowOf selExaRows "web-search-exa").name == "@tonydua/dsh-web-search-exa")
+        "capability: exa row must reference the community package")
+      (pkgs.lib.assertMsg ((rowOf selExaRows "web-search-exa").config.apiKeyEnv == "EXA_API_KEY")
+        "capability: exa row config must carry declared provider attrs")
+      (pkgs.lib.assertMsg ((rowOf selExaRows "web").config.searchProvider == "exa")
+        "capability: web row must restate searchProvider = selected id")
+      (pkgs.lib.assertMsg (builtins.length selExa.perProfile.default.extraPlugins == 1)
+        "capability: selecting exa must add the package source to every profile")
       (pkgs.lib.assertMsg (st ? "web-search-deepseek" && st."web-search-deepseek".maxUses == 3)
-        "capability: webSearch attrs must render into settings.\"web-search-deepseek\"")
+        "capability: selected deepseek-official attrs must render into settings.\"web-search-deepseek\"")
       (pkgs.lib.assertMsg (st ? "llm-deepseek" && st."llm-deepseek".thinking == "enabled")
         "capability: llmDeepseek attrs must render into settings.\"llm-deepseek\"")
-      (pkgs.lib.assertMsg (stEmpty == { })
-        "capability: {} (enabled, zero config) must render no settings section")
+      (pkgs.lib.assertMsg (stExa ? "web-search-exa" && stExa."web-search-exa".numResults == 5 && !(stExa ? "web-search-deepseek"))
+        "capability: selected exa attrs must render into settings.\"web-search-exa\" only")
     ]) "touch $out");
 
   # 三态负例:typed 选项 × inBoxPlugins 显式冲突 / providers=null × settings
-  # 声明 / llmDeepseek=null × defaultModel 指向 deepseek-official → eval throw。
+  # 声明 / llmDeepseek=null × defaultModel 指向 deepseek-official /
+  # webSearch 未知 id / 能力禁 × 声明表非空 → eval throw。
   # tryEval 只到 WHNF,throw 在 applyPlugins 内部 → deepSeq 强制(实测先例)
   capabilityClash =
     let
@@ -269,11 +284,11 @@ let
     in
     pkgs.runCommand "dsh-capability-clash-check" { } (builtins.seq ([
       (tryThrow (mkApply {
-        webSearch = { };
+        webSearch = "deepseek-official";
         inBoxPlugins."web-search-deepseek".enable = false;
       }) "capability: webSearch set + inBoxPlugins disabling provider row must throw")
       (tryThrow (mkApply {
-        webSearch = { };
+        webSearch = "deepseek-official";
         inBoxPlugins."tool-web".enable = false;
       }) "capability: webSearch set + inBoxPlugins disabling tool row must throw")
       (tryThrow (mkApply {
@@ -290,7 +305,53 @@ let
         providers = { };
         defaultModel = { provider = "deepseek-official"; model = "deepseek-v4-pro"; };
       }) "capability: llmDeepseek=null + defaultModel → deepseek-official must throw")
+      (tryThrow (mkApply {
+        webSearch = "exa";
+      }) "capability: webSearch = exa without a webSearchProviders.exa declaration must throw (not a base backend)")
+      (tryThrow (mkApply {
+        webSearch = null;
+        webSearchProviders.exa.apiKeyEnv = "EXA_API_KEY";
+      }) "capability: webSearchProviders non-empty + webSearch = null must throw (declared backends would never run)")
     ]) "touch $out");
+
+  # exa 后端端到端:选中 exa 的 profile bundle 真 boot,web-search-exa 条目
+  # 须进组合树(insert 生效而非 warn-skip)且 deepseek 后端行被禁。
+  # registry 真包构建(peers 链接齐)→ 这是全链验证(构建级)
+  dsh-exa-in-tree =
+    let
+      applied = dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          plugins = { };
+          profiles = { default = { }; };
+          inBoxPlugins = { };
+          webSearch = "exa";
+          webSearchProviders.exa.apiKeyEnv = "EXA_API_KEY";
+        };
+      };
+      inc = applied.perProfile.default;
+      bundle = dshLib.buildProfile {
+        inherit pkgs;
+        profile = dshLib.mkProfile {
+          name = "exa-tree";
+          plugins = [ "@deepseek-ai/dsh-base" ] ++ inc.extraPlugins;
+          userPatchesFile = null;
+          userPatches = inc.extraPatches;
+        };
+      };
+    in
+    pkgs.runCommand "dsh-exa-in-tree-check" { } ''
+      ${materialize "exa-tree" bundle}
+      ${pkgs.dsh}/bin/dsh --profile exa-tree --dump-config > "$TMPDIR/dump.log" 2>&1 \
+        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      grep -q 'web-search-exa' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "web-search-exa entry missing from composed tree" >&2; exit 1;
+      }
+      ! grep -q 'entry "web-search-exa" not found' "$TMPDIR/dump.log" || {
+        cat "$TMPDIR/dump.log" >&2; echo "web-search-exa row was warn-skipped (patch shape, not insert)" >&2; exit 1;
+      }
+      touch $out
+    '';
 
 
   # 物化 bundle 到 scratch DSH_HOME(dsh boot 会改写 profile 根 cordis.yml,须可写副本)
@@ -307,6 +368,7 @@ in
   dsh-inbox-rows = inBoxRows;
   dsh-capability-rows = capabilityRows;
   dsh-capability-clash = capabilityClash;
+  dsh-exa-in-tree = dsh-exa-in-tree;
   dsh-profile-structure = pkgs.runCommand "dsh-profile-structure-check"
     { nativeBuildInputs = [ pkgs.jq ]; } ''
       bundle=${goodProfile}

@@ -126,29 +126,58 @@ in
     # 设计准则与可见性规则见 README「插件形态与通道选择」:禁用行进
     # 所有 profile 用户 patch 层;attrs 渲染进对应 settings 命名空间段
     # (yq merge,免重启)。默认值由空载荷代价选出。
+    #
+    # webSearch = 选择器形态(README:声明必有效,在场或被选择器解释):
+    # 能力骨架行(web/tool-web)不设独立旋钮(假自由度:启 provider 必启、
+    # 禁 provider 必禁);用户唯一的自由度是"provider 是谁"。
     webSearch = lib.mkOption {
-      # attrs = settings."web-search-deepseek" 段(键:apiKey/apiKeyEnv/
-      # baseURL/model/apiVersion/maxTokens/maxUses,schema实测 rc.6 源码);
-      # 刻意 freeform 不逐键 typed —— 上游 rc 阶段 schema 未稳
-      type = lib.types.nullOr lib.types.attrs;
+      # null = 禁能力(骨架+在场后端行全禁);str = 启用并选中该 provider id
+      type = lib.types.nullOr lib.types.str;
       default = null;
+      example = "exa";
+      description = ''
+        网页搜索能力开关 + provider 选择器(二合一:这是唯一的自由度)。
+        null(默认)= 禁用:web/web-search-deepseek/tool-web disable 行
+        进所有 profile(base 树自带三行,故默认即禁,见 README 迁移注记)。
+        str = 启用并选中该 provider id:
+        - "deepseek-official"(base 自带):零声明即用,key 走 export
+          DEEPSEEK_API_KEY 或 Web UI 运行时配;参数调 webSearchProviders
+        - "exa":webSearchProviders 声明 exa 后端(非 base 自带,须声明)
+        选中才启用:未选中后端出 disable 行(死卡清理)。前提:上游无
+        运行时 provider 切换(dsh-web 实证,searchProvider 是行 Config
+        非命名空间段,构造器定格;热切出现则改"声明即在",lib.nix 有
+        同步标记)。选择器 id 不在声明表 ∪ {deepseek-official} → 求值期
+        fail-loud。
+        已知限制:web face 的 preset 自带 tool-web,patch 层不可达 ——
+        null 时 web 会话的工具卡残留(README 已知限制节)。
+      '';
+    };
+
+    webSearchProviders = lib.mkOption {
+      # attrs freeform:键 = provider id,值 = 该后端的配置 attrs。
+      # deepseek-official → settings."web-search-deepseek" 段(热生效);
+      # exa → 行 config(patch 整行替换,rc.1 无 settings 命名空间,
+      # schema 实测于 npm 0.0.1-rc.1 源码)
+      type = lib.types.attrsOf lib.types.attrs;
+      default = { };
       example = lib.literalExpression ''
         {
-          maxUses = 3;   # 单次请求服务器侧搜索次数上限(默认 5)
-          # baseURL = "https://api.deepseek.com/anthropic/v1";  # 接口地址
-          # apiKeyEnv = "DEEPSEEK_API_KEY";                     # 凭证引用
+          "deepseek-official".maxUses = 3;          # 单次请求服务器侧搜索上限
+          exa = {
+            apiKeyEnv = "EXA_API_KEY";              # exa rc.1: 行 config 级
+            numResults = 5;
+          };
         }
       '';
       description = ''
-        网页搜索(DeepSeek 原生 web_search)。null(默认)= 禁用:
-        web/web-search-deepseek/tool-web 三行 disable 进所有 profile
-        (三行独立,"不要搜索能力"同覆盖 provider 与工具;base 树自带
-        三行,故默认即禁,见 README 迁移注记)。{} = 显式启用零配置
-        (key 走 export 或 Web UI Models 页运行时配)。attrs = 启用并
-        渲染进 settings."web-search-deepseek"(每次搜索按次投影,改完
-        下一次搜索即生效)。
-        已知限制:web face 的 preset 自带 tool-web,patch 层不可达 ——
-        null 时 web 会话的工具卡残留(README 已知限制节)。
+        webSearch 后端声明表。声明 ≠ 启用:仅被 webSearch 选中的后端
+        在场(README:声明必有效,在场或被选择器解释 —— 备案待命,
+        切换只改 webSearch 一个字符串)。每条按后端类型渲染:
+        deepseek-official → settings."web-search-deepseek" 段
+        (apiKey/apiKeyEnv/baseURL/model/maxUses/...,按次投影热生效);
+        exa → 行 config(apiKey/apiKeyEnv/baseURL/searchType/numResults/
+        highlightsPerResult)。webSearch = null × 本表非空 → 求值期
+        fail-loud(声明了后端却禁能力)。
       '';
     };
 

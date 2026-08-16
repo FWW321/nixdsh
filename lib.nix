@@ -183,7 +183,7 @@ let
   # 条目;defaultModel 渲染进 agent-default-model 段(schema 实测于源码)
   renderSettings =
     { settings, telemetry, providers ? { }, defaultModel ? null
-    , webSearch ? null, llmDeepseek ? null }:
+    , webSearch ? null, webSearchProviders ? { }, llmDeepseek ? null }:
     let
       # 省略 null/空的字段;settings 逃生口最后并(未 typed 字段直通)。
       # `or` 缺省:renderSettings 可脱离 module system 直接调用(checks/测试)
@@ -220,6 +220,16 @@ let
       sectionIf = ns: attrs:
         if attrs == null || attrs == { } then { }
         else { ${ns} = (settings.${ns} or { }) // attrs; };
+      # webSearch 后端参数:deepseek-official → web-search-deepseek 段;
+      # exa → web-search-exa 段(@tonydua 版有 settings 命名空间,热改)。
+      # 仅选中后端的段渲染(未选中行已禁,段无消费者)
+      wsSelected = webSearch;
+      wsSettings =
+        if wsSelected == null then { }
+        else if wsSelected == "deepseek-official" then
+          sectionIf "web-search-deepseek" (webSearchProviders.${wsSelected} or null)
+        else
+          sectionIf "web-search-exa" (webSearchProviders.${wsSelected} or null);
     in
     settings
     // (
@@ -243,7 +253,7 @@ let
           });
       }
     )
-    // (sectionIf "web-search-deepseek" webSearch)
+    // wsSettings
     // (sectionIf "llm-deepseek" llmDeepseek);
 
   # 上游 CLI 子命令集(自动):commander 在 bin.js 的注册模式
@@ -390,8 +400,8 @@ let
       # stub cfg(无该键)与真实 cfg(默认 null)等价;显式 attrs 时模块
       # 系统保证键存在,inherit (cfg) 反而会炸 stub 调用方
       settingsJSON =
-        if renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; llmDeepseek = cfg.llmDeepseek or null; } == { } then null
-        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; llmDeepseek = cfg.llmDeepseek or null; });
+        if renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; webSearchProviders = cfg.webSearchProviders or { }; llmDeepseek = cfg.llmDeepseek or null; } == { } then null
+        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers defaultModel; webSearch = cfg.webSearch or null; webSearchProviders = cfg.webSearchProviders or { }; llmDeepseek = cfg.llmDeepseek or null; });
       settingsPrelude = optionalString (settingsJSON != null) ''
         dsh_home="''${DSH_HOME:-$HOME/.dsh}"
 
@@ -619,14 +629,22 @@ let
                # 中间绑定而非 `inbox "x".enable` 直连:避免选择器解析歧义
                skillProvider = inbox "skill-filesystem";
                presetRoster = inbox "agent-presets";
-               wsNull = (cfg.webSearch or null) == null;
-               dshNull = (cfg.llmDeepseek or null) == null;
-               piAiNull = (cfg.providers or { }) == null;
-               # typed 启用(非 null)但 inBoxPlugins 显式禁同组行
-               wsClash =
-                !wsNull && (inbox "web").enable == false
-                || !wsNull && (inbox "web-search-deepseek").enable == false
-                || !wsNull && (inbox "tool-web").enable == false;
+                wsNull = (cfg.webSearch or null) == null;
+                dshNull = (cfg.llmDeepseek or null) == null;
+                piAiNull = (cfg.providers or { }) == null;
+                wsProviders = cfg.webSearchProviders or { };
+                # 选择器形态:webSearch 非 null → id 必须在声明表 ∪ base
+                # 自带集;非 base id 必须已声明(包源/参数都在声明条目)
+                wsKnown =
+                  [ "deepseek-official" ] ++ (attrNames wsProviders);
+                wsUnknown = !wsNull && !builtins.elem cfg.webSearch wsKnown;
+                wsOrphanProviders = wsNull && wsProviders != { };
+                # typed 启用(非 null)但 inBoxPlugins 显式禁同组行
+                wsClash =
+                 !wsNull && (inbox "web").enable == false
+                 || !wsNull && (inbox "web-search-deepseek").enable == false
+                 || !wsNull && (inbox "tool-web").enable == false
+                 || !wsNull && (inbox "web-search-exa").enable == false;
                dshClash = !dshNull && (inbox "llm-deepseek").enable == false;
                piAiClash = piAiNull && (inbox "llm-pi-ai").enable == false;
                # typed 禁用(null)但配置仍指向它 —— 意图自相矛盾。
@@ -642,8 +660,12 @@ let
                throw "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider"
              else if (cfg.presets or { }) != { } && presetRoster.enable == false then
                throw "programs.dsh: presets are declared but inBoxPlugins.agent-presets.enable = false — the preset roster is disabled; remove the presets or re-enable the roster"
-             else if wsClash then
-               throw "programs.dsh: webSearch is set but inBoxPlugins disables one of web/web-search-deepseek/tool-web — use webSearch alone (null disables all three rows)"
+              else if wsClash then
+                throw "programs.dsh: webSearch is set but inBoxPlugins disables one of web/web-search-deepseek/web-search-exa/tool-web — use webSearch alone (null disables the capability rows)"
+              else if wsUnknown then
+                throw "programs.dsh: webSearch = \"${cfg.webSearch}\" is not a declared webSearchProviders entry nor \"deepseek-official\" — declare the backend in webSearchProviders or select a known id"
+              else if wsOrphanProviders then
+                throw "programs.dsh: webSearchProviders is non-empty but webSearch = null (capability disabled) — declared backends would never run; set webSearch to a declared id or clear the table"
              else if dshClash then
                throw "programs.dsh: llmDeepseek is set but inBoxPlugins.\"llm-deepseek\".enable = false — use llmDeepseek alone (null disables the row)"
              else if piAiClash then
@@ -763,36 +785,78 @@ let
         };
       mcpPatches = mcpSecret.rows;
       mcpSecretRefs = mcpSecret.refs;
-       # 配置承载型三态的 patch 侧:仅 null 出 disable 行(启用走 settings
-       # 段 + 树自带行,{}/attrs 无行);行组 = 能力的全部独立行(webSearch
-       # 三行,README 已知限制:preset 内 tool-web patch 层不可达)。
-       # 追加在 inBoxPatches 之后,同 id 后行胜出(与用户层同写一行时,
-       # _usageAssert 已拦显式冲突;顺带的 enable=null 不表态无冲突)
-       # ⚠ 选中才启用(未选中后端出 disable 行)的前提:provider 切换在
-       # 上游是**行级变化**(dsh-web 源码实证:WebRuntime 无 settings
-       # 命名空间,searchProvider 是行 Config,构造器一次性定格,env
+       # 配置承载型三态的 patch 侧。webSearch 是选择器形态(README:声明
+       # 必有效,在场或被选择器解释):
+       #   null  → 骨架(web/tool-web)+ base 自带后端(deepseek)全禁
+       #   str   → 骨架启用(树自带行不动);未选中后端禁行(死卡清理:
+       #           未选中 provider 在场只有死 UI/必败调用)
+       # 追加在 inBoxPatches 之后,同 id 后行胜出(_usageAssert 拦显式
+       # 冲突;顺带的 enable=null 不表态无冲突)。
+       # ⚠ "选中才启用"的前提:provider 切换在上游是**行级变化**
+       # (dsh-web 源码实证:WebRuntime 无 settings 命名空间,
+       # searchProvider 是行 Config,构造器一次性定格,env
        # DSH_WEB_SEARCH_PROVIDER 也仅 boot 读)——声明并在场但未选中
        # 只会留死卡,禁行无运行时代价。若上游将来把选择 id 接进 settings
        # 热重载(即可运行时切换),此策略应改为"声明即在,选择器热切",
        # 本行组随之收敛为能力骨架行(web/tool-web)。
+       # 后端 id → cordis 行 id(声明表键 = provider id,行 id 另有约定)
+       wsRowId = {
+         "deepseek-official" = "web-search-deepseek";
+         "exa" = "web-search-exa";
+       };
+       baseWsBackends = [ "deepseek-official" ];
+       cfgWs = cfg.webSearch or null;
+       cfgWsProviders = cfg.webSearchProviders or { };
+       wsDisable =
+        # 骨架:能力禁用时
+        (lib.optionals (cfgWs == null) [ "web" "tool-web" ])
+        # base 自带后端行:能力禁用,或选中的不是它
+        ++ (lib.optionals (cfgWs == null || cfgWs != "deepseek-official")
+          [ "web-search-deepseek" ])
+        # 非 base 后端行(声明了但未选中;行 id 来自 wsRowId 表)
+        ++ (lib.filter (id: id != cfgWs && wsRowId ? ${id})
+          (attrNames cfgWsProviders));
        capabilityPatches =
-        (lib.optionals ((cfg.webSearch or null) == null)
-          [ { id = "web"; disabled = true; }
-            { id = "web-search-deepseek"; disabled = true; }
-            { id = "tool-web"; disabled = true; }
-          ])
+         (map (id: { inherit id; disabled = true; }) wsDisable)
         ++ (lib.optionals ((cfg.llmDeepseek or null) == null)
           [ { id = "llm-deepseek"; disabled = true; } ])
         ++ (lib.optionals ((cfg.providers or { }) == null)
           [ { id = "llm-pi-ai"; disabled = true; } ]);
+      # exa 后端(@tonydua/dsh-web-search-exa,registry 收录;官方 npm
+      # @deepseek-ai rc.1 无 settings 命名空间且无匿名兜底,选社区版):
+      # 行 id web-search-exa,provider id "exa";有 settings 命名空间
+      # (web-search-exa)→ 参数走 renderSettings 热改,行 config 只需
+      # 引导值。选中即 insert 行 + 包源进 extraPlugins(插件不在 CLI
+      # node_modules,与 MCP 的 dsh-mcp-client 不同——那个是 CLI 自带)
+      wsExaPkgName = "@tonydua/dsh-web-search-exa";
+      wsProviderRows =
+        (lib.optionals (cfgWs == "exa") [
+          {
+            id = "web-search-exa";
+            name = wsExaPkgName;
+            config =
+              (lib.filterAttrs (_: v: v != null && v != { })
+                (cfgWsProviders.exa or { }));
+          }
+        ]);
+      # 选中非 base 后端 → 包源进 extraPlugins(pkgs.dshPlugins 解析)。
+      # web-search-exa 尾名即包尾名,registryLookup 反查直达
+      wsProviderSources =
+        lib.optional (cfgWs == "exa") (registryLookup "web-search-exa");
+      # 选中非 base 后端 → web 行重述 searchProvider(patch 整行替换,
+      # base 行只此一键,重述干净)
+      wsSelectorRow =
+        if cfgWs != null && cfgWs != "deepseek-official" then
+          [ { id = "web"; config = { searchProvider = cfgWs; }; } ]
+        else [ ];
     in
     {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜出)
       inherit inBoxPatches;
       # MCP 服务器行(同样全局,追加在 in-box 行之后)
       mcpPatches = mcpPatches;
-      # 三态 typed 选项的 null disable 行组(追加在 in-box 行之后)
-      inherit capabilityPatches;
+      # 三态 typed 选项的行组(disable + 后端行 + 选择器行;追加在 in-box 行之后)
+      inherit capabilityPatches wsProviderRows wsSelectorRow;
       # secret 占位符引用的文件路径清单(wrapper 注入块消费)
       inherit mcpSecretRefs;
       # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
@@ -803,13 +867,16 @@ let
         (map
           (profileName: nameValuePair profileName {
             extraPlugins =
-              map (c: c.plugin.source)
-                (filter (c: builtins.elem profileName c.profiles) contributions);
+              (map (c: c.plugin.source)
+                (filter (c: builtins.elem profileName c.profiles) contributions))
+              ++ (lib.filter (s: s != null) wsProviderSources);
             extraPatches =
               (concatMap (c: c.patches)
                 (filter (c: builtins.elem profileName c.profiles) contributions))
               ++ inBoxPatches
               ++ capabilityPatches
+              ++ wsProviderRows
+              ++ wsSelectorRow
               ++ mcpPatches;
           })
           allProfileNames);
