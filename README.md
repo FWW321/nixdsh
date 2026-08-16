@@ -522,7 +522,9 @@ staged 替换 —— 所有权归声明方)。
   显式 `presets.<name>` 声明与发现撞名 → 显式胜;黑名单
   `plugins.<name>.excludedPresets = [ "id" ]` 不接管特定 preset
   (走上游播种通道,如 tui 的 ensurePackagedPresets 原件),排除 id
-  不在插件探测集(拼错/上游已删)→ eval throw
+  不在插件探测集(拼错/上游已删)→ eval throw;全禁
+  `plugins.<name>.presets = false`(与 face = false 的"压制自动通道"
+  同构,与 excludedPresets 同设 → throw)
 - **删除自动清理**:行增/删/改 → 产物 store 路径变 → stamp 不匹配
   → 重物化;删整个声明 → 既有孤儿清理兜底
 - **行不在 preset 里 → 无操作**(minimal 无 tool-web 行是身份语义,

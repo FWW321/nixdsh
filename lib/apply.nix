@@ -469,11 +469,17 @@ let
         in
         # tryEval:sourceOf 对未知插件 throw(与插件分发同语义),发现面
         # 不放大 —— 单个插件源解析失败不影响其余(该错误在分发路径已
-        # fail-loud,这里不必重复炸)
+        # fail-loud,这里不必重复炸)。
+        # presets = false 全禁(与 face=false 的"压制自动通道"同构);
+        # 与 excludedPresets 非空同设 → 矛盾声明 throw
         builtins.foldl'
           (acc: name:
             let p = cfg.plugins.${name}; in
             if !p.enable then acc
+            else if !(p.presets or true) then
+              (if (p.excludedPresets or [ ]) != [ ] then
+                throw "programs.dsh.plugins.${name}: presets = false (take over none) conflicts with a non-empty excludedPresets — pick one"
+               else acc)
             else
               let r = builtins.tryEval (sourceOf name p); in
               if r.success then acc // (filterExcluded name p (scanSrc r.value)) else acc)

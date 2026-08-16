@@ -206,6 +206,14 @@ in
         (applyDiscover {
           e = { enable = true; source = pathSrc; excludedPresets = [ "no-such-preset" ]; };
         }).handmade null);
+      # presets = false 全禁 + 与 excludedPresets 矛盾 → throw
+      foundAllOff = applyDiscover {
+        f = { enable = true; source = pathSrc; presets = false; };
+      };
+      conflictOff = builtins.tryEval (builtins.deepSeq
+        (applyDiscover {
+          g = { enable = true; source = pathSrc; presets = false; excludedPresets = [ "handmade" ]; };
+        }).handmade null);
       # 显式声明胜:同名发现源被显式 presets 覆盖(hm-module 合流序)
       merged = found // { handmade = "/explicit/wins"; };
       assert' = c: m: pkgs.lib.assertMsg c m;
@@ -221,6 +229,10 @@ in
         "preset-discover: excludedPresets must suppress takeover of the listed preset only")
       (assert' (!typoExcl.success)
         "preset-discover: excludedPresets with an id the plugin does not ship must throw at eval time")
+      (assert' (!foundAllOff ? handmade && !foundAllOff ? second-one)
+        "preset-discover: presets = false must suppress the plugin's entire preset takeover")
+      (assert' (!conflictOff.success)
+        "preset-discover: presets = false + non-empty excludedPresets must throw (conflicting declarations)")
       (assert' (merged.handmade == "/explicit/wins")
         "preset-discover: explicit preset declaration must win over discovered")
       (assert' (lib.match ".*/config/agent-presets/standard" (dshLib.shippedPreset pkgs "standard") != null)

@@ -576,6 +576,19 @@ in
               播种原件),不做能力行重放。排除 id 不在插件探测集内
               (拼错/上游已删)→ 求值期 throw。与显式
               presets.\<id\>.source 声明是两条通道,后者恒胜。
+              全禁用 presets = false 更直接,二者互斥(同设 → throw)。
+            '';
+          };
+          presets = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            example = false;
+            description = ''
+              是否接管本插件托管的 preset(自动发现通道总开关)。
+              false = 全禁:所有 preset 走上游自身通道(如 dsh-tui 的
+              ensurePackagedPresets 播种原件),不做能力行重放 ——
+              与 face = false 的"压制自动推导"同构。与
+              excludedPresets 同设非空 → 求值期 throw(矛盾声明)。
             '';
           };
           patchId = lib.mkOption {
