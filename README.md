@@ -147,6 +147,24 @@ web 服务与 `dsh tui` 并行运行是预期用法:两进程、两棵树、一�
 
 ## 装插件
 
+## agent 预设
+
+预设 = 一个会话 Agent 的插件组装(工具/提示词/能力),`agent.cordis.yml`
+组合树 + `preset.yml` 元数据 + 任意 `.mjs` 插件文件 —— 纯文件零构建
+(宿主 loader 负责解析),上游**热发现**(运行中新增免重启,同 settings
+档,非 profile 树档)。
+
+```nix
+programs.dsh.presets.liangshen.source = ./presets/liangshen;
+```
+
+activation 物化到 `$DSH_HOME/.agent-presets/<name>`(stamp 语义同
+profile:未变不动,孤儿自扫)。声明名 Nix 拥有 —— 物化覆盖 TUI 创造
+模式的同名迭代版(`.dsh-tui-managed.json`);**import 工作流**:创造
+模式做原型 → `cp -r ~/.config/deepseek-harness/.agent-presets/<名>`
+进 config 仓库 → 声明 → 之后迭代走仓库。缺 `agent.cordis.yml` 求值期
+fail-loud。与 shipped 预设撞 id 会被上游 root 优先级遮蔽 —— 改名。
+
 **方式 A:进 registry(常用插件,nixvim 式零样板)**
 
 ```sh

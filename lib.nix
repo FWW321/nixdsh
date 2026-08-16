@@ -296,6 +296,17 @@ let
       complete -F _dsh ${name}
     '';
 
+  # agent 预设源校验(rc.5 dsh-agent-presets 实测):目录须含组合文件
+  # agent.cordis.yml(preset.yml 元数据/.mjs 插件可选)。纯文件零构建,
+  # 上游热发现免重启 —— 物化即生效
+  validatePresets = presets:
+    mapAttrs
+      (name: p:
+        if !builtins.pathExists "${toString p.source}/agent.cordis.yml" then
+          throw "programs.dsh.presets.${name}.source: agent.cordis.yml missing in ${toString p.source} (a preset directory = agent.cordis.yml + optional preset.yml and .mjs plugins)"
+        else p.source)
+      presets;
+
   # wrapper 渲染(TonyWu20 的 yq-merge 语义 + DSH_HOME):
   # - 声明 settings 每次启动 merge 进 settings.yaml:声明值覆盖同名键,本地其他键保留
   #   (dsh Web UI 会运行时改配置,yq merge 是唯一不与之打架的声明式方案)
@@ -603,6 +614,7 @@ in
     renderWrapper
     renderCompletion
     upstreamSubcommands
+    validatePresets
     applyPlugins
     mkDsh
     ;

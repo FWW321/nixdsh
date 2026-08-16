@@ -62,6 +62,11 @@ let
     })
     finalProfiles;
 
+  # agent 预设:纯文件目录物化到 .agent-presets/<name>(上游热发现,
+  # 免重启)。校验在 lib.validatePresets(eval 期 fail-loud);stamp 语义
+  # 同 profile(声明名 Nix 拥有,物化覆盖创造模式迭代版 —— 声明即接管)
+  presetSources = dshLib.validatePresets cfg.presets;
+
   # activation:物化不可变 bundle 为可写副本(dsh 每次 boot 改写 profile 根 cordis.yml)
   activateProfile = name: bundle:
     let
@@ -119,6 +124,34 @@ in
           [ -f "$_dir/.dsh-nix-stamp" ] || continue
           _name="$(basename "$_dir")"
           case " $_keep " in
+            *" $_name "*) ;;
+            *) rm -rf "$_dir" ;;
+          esac
+        done
+
+        # agent 预设物化(热发现,免重启)+ 同语义孤儿清理。无 stamp 的
+        # 目录是 TUI 创造模式/手写的,不碰
+        _pkeep="${lib.concatStringsSep " " (lib.attrNames presetSources)}"
+        ${lib.concatStringsSep "\n" (lib.mapAttrsToList
+          (name: src: ''
+            _pdir="${cfg.dshHome}/.agent-presets/${name}"
+            _pstamp="$_pdir/.dsh-nix-stamp"
+            if [ -f "$_pstamp" ] && [ "$(cat "$_pstamp")" = "${toString src}" ]; then
+              :
+            else
+              rm -rf "$_pdir"
+              mkdir -p "$_pdir"
+              cp -a "${toString src}/." "$_pdir/"
+              chmod -R u+w "$_pdir"
+              printf '%s' "${toString src}" > "$_pstamp"
+            fi
+          '')
+          presetSources)}
+        for _dir in "${cfg.dshHome}"/.agent-presets/*; do
+          [ -e "$_dir" ] || continue
+          [ -f "$_dir/.dsh-nix-stamp" ] || continue
+          _name="$(basename "$_dir")"
+          case " $_pkeep " in
             *" $_name "*) ;;
             *) rm -rf "$_dir" ;;
           esac

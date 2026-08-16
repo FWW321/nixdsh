@@ -241,6 +241,26 @@ in
       touch "$out"
     '';
 
+  # agent 预设:eval 期校验(缺 agent.cordis.yml → throw;正例 =
+  # fixtures/preset-ok 目录);物化脚本在 hm-module activation
+  # (与 profile 同 stamp 模式,不重复验证)
+  dsh-presets =
+    let
+      bad = builtins.tryEval
+        (builtins.deepSeq
+          (dshLib.validatePresets { "no-composition".source = ./checks.nix; })
+          null);
+      good = dshLib.validatePresets {
+        ok.source = ./fixtures/preset-ok;
+      };
+    in
+    pkgs.runCommand "dsh-presets-check" { }
+      (builtins.seq (pkgs.lib.assertMsg (!bad.success)
+        "dsh-presets: source without agent.cordis.yml must be rejected at eval time")
+        (builtins.seq (pkgs.lib.assertMsg (good ? ok)
+          "dsh-presets: valid preset directory must pass")
+          "touch $out"));
+
   # renderSettings 合并语义:typed providers 逐条覆盖 freeform 同名条目、
   # null/空字段省略、freeform 命名空间其他键与其他 provider 条目保留。
   # 断言在求值期生效:任一不成立 → check 求值失败(fail-loud 无需构建)

@@ -379,6 +379,39 @@ in
       '';
     };
 
+    # agent 预设(rc.5 dsh-agent-presets 实测):目录 = 预设,id = 目录名,
+    # agent.cordis.yml(组合树)+ preset.yml(显示元数据)+ 任意 .mjs 插件,
+    # 纯文件零构建(宿主 loader 负责模块解析,无需 node_modules)。
+    # 热发现:运行中新增免重启(每次调用 re-read roots,同 settings.yaml 档)
+    presets = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          source = lib.mkOption {
+            type = lib.types.path;
+            description = ''
+              预设目录(path 到仓库内),须含 agent.cordis.yml
+              (可选 preset.yml 元数据与 .mjs 插件文件)。
+              推荐工作流:TUI 创造模式做原型 → cp 进本仓库 → 此处声明
+              (声明即接管:activation 物化覆盖同名目录,含创造模式
+              迭代版 —— 后续迭代走仓库或先删声明)。
+            '';
+          };
+        };
+      });
+      default = { };
+      example = lib.literalExpression ''
+        {
+          liangshen.source = ./presets/liangshen;  # agent.cordis.yml + preset.yml + *.mjs
+        }
+      '';
+      description = ''
+        agent 预设声明:activation 物化到
+        \$DSH_HOME/.agent-presets/\<name\>(stamp 同 profile 模式),
+        免重启生效。与 shipped 预设同名会被上游 root 优先级遮蔽
+        ——改名,勿与官方预设撞 id。
+      '';
+    };
+
     # in-box cordis 条目开关/覆盖(全局,进所有 profile 的用户 patch 层)。
     # 条目默认状态有三种(开/关/!!js 条件),且随 bundle 组合变化 —— 如
     # tool-bash 基础树启用、被 dsh-tui 的 patch 关掉;用户层是最后一层,
