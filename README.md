@@ -213,11 +213,23 @@ catalog(v4-flash/pro)无条件注册、无 key 即死 UI 条目 → 默认 `null
 
  配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
 启用必显式 —— 给配置(声明即启用)或显式 enable(为纯运行时配置留位)。
-落地状态:`mcpServers`/`skills`/`presets` 已是此语义;路线图:
+ 落地状态:`mcpServers`/`skills`/`presets` 已是此语义;路线图:
 `webSearch` / `llmDeepseek` typed 选项(默认 null)、`providers` 升级
 nullOr(pi-ai 三态化,默认 {} 保持启用)。此前由层 2 + 层 3 组合表达
 (如 `inBoxPlugins."llm-deepseek".enable = false` 即"不要 deepseek
 路由"意图暂住层 3 的形态)。
+
+**已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
+rc.6)。web-app 的 bundle patch 把宿主树 tool-web 禁掉移入 preset;
+shipped preset standard/code/cordis 的 `agent.cordis.yml` 各自带一份
+`tool-web`(minimal 无)。preset 是 CLI 包内只读独立组合,profile patch
+只作用宿主树;自建同名 preset 被 shipped root first-root-wins 遮蔽,
+覆盖路线也堵死。后果:`webSearch = null` 在 web face 禁掉 provider
+(`web`/`web-search-deepseek` 行,patch 有效),但 preset 的 tool-web
+按"稳定注册"原则照常注册 —— `web_search` 工具卡留在 UI、schema token
+照吃,调用报 `WEB_PROVIDER_UNAVAILABLE`。tui/headless 的 tool-web 是
+宿主树行,disable 全净。根治需上游:preset 级配置化裁剪或 agent-presets
+行级禁用(随 preset opt-out issue 一并提)。
 
 ## 入口
 
