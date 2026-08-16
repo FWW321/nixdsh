@@ -208,11 +208,11 @@ let
           offenders =
             concatMap
               (pname:
-                let p = cfg.profiles.${pname}; in
+                let p = (cfg.profiles or { }).${pname}; in
                 map
                   (s: { profile = pname; source = s; })
                   (filter isFaceSource (p.plugins or [ ])))
-              (attrNames cfg.profiles);
+              (attrNames (cfg.profiles or { }));
           fmt = o: "${o.profile} ← ${if builtins.isString o.source then o.source else toString o.source}";
         in
         if offenders != [ ] then
