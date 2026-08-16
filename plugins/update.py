@@ -171,11 +171,21 @@ def main() -> None:
         # (如 @tonydua/dsh-web-search-exa 的 @deepseek-ai/schemastery)
         # 须经回链解析 —— 实测漏链 = ERR_MODULE_NOT_FOUND 炸 boot
         # (ESM 从插件真实路径向上找 node_modules,profile 级链接救不了)
+        # deps 并入 devDeps:预构建插件源码树不带 node_modules,运行时
+        # import 的一切 @deepseek-ai/* 都须经回链 —— exa 的教训是
+        # dependencies,本次 zhipu 的教训是 devDependencies(settings 段
+        # 安装是运行时路径,上游包把它错放 devDeps)。宁可多链(nix store
+        # 硬链接零成本)不可漏链(漏 = ERR_MODULE_NOT_FOUND 炸 boot)
         peers = sorted(
             set((manifest.get("peerDependencies") or {}).keys())
             | {
                 k
                 for k in (manifest.get("dependencies") or {})
+                if k.startswith("@deepseek-ai/")
+            }
+            | {
+                k
+                for k in (manifest.get("devDependencies") or {})
                 if k.startswith("@deepseek-ai/")
             }
         )
