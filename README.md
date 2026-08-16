@@ -105,13 +105,23 @@ nixdsh/
    loader entry id` 直接拒绝 boot;TTY-bound 的 TUI 混入 headless 树则
    `dsh "task"` 全挂(实测)。因此:
 
-   | 轴 | 选项 | 增长方式 | 是否产生 profile |
-   |---|---|---|---|
-   | 供应商/模型/条目开关 | `providers` / `defaultModel` / `inBoxPlugins` | 全局一处 | 否 |
-   | 功能插件 | `plugins.<name>` | `enable = true`(`profiles = []` 缺省全分发) | 否 |
-   | 交互面 | `plugins.<name>.face = "<名>"` | 每种 UI 入口一个(有界) | 是(自动生成) |
+    | 轴 | 选项 | 增长方式 | 是否产生 profile |
+    |---|---|---|---|
+    | 供应商/模型/条目开关 | `providers` / `defaultModel` / `inBoxPlugins` | 全局一处 | 否 |
+    | 功能插件 | `plugins.<name>` | `enable = true`(`profiles = []` 缺省全分发) | 否 |
+    | 交互面 | `plugins.<name>.face = "<名>"` | 每种 UI 入口一个(有界) | 是(自动生成) |
 
-    加功能插件 = 一处 `enable`,零新增;加交互面 = 一处
+    **交互面 profile 的最终树 = base 全套行 + 该 face 树叠层**(实测三 face
+    物化 bundles 完全一致:`web = [dsh-base, dsh-web-app]`、`headless =
+    [dsh-base, dsh-headless]`、`tui = [dsh-base, dsh-tui]`;模块配方
+    lib.nix `[ "@deepseek-ai/dsh-base" source ]` 与物化一一对应)。boot 按
+    bundles 有序叠 patch、同 id 后行胜出 —— base 的全部行(`llm-pi-ai`/
+    `web`/`web-search-deepseek`/`tool-web`/...)在**三个 face 的最终树里
+    都在**;face 树只是覆盖层(dsh-tui 自带的 `llm-deepseek` 强意见默认
+    即一例)。手动 `profiles.*` 的层表由用户全权声明,base 习惯居首,
+    顺序即叠层序。
+
+     加功能插件 = 一处 `enable`,零新增;加交互面 = 一处
     `plugins.<name>.enable = true`(source/face 均可省:registry 收录的
     插件按键名尾缀反查,face 读收录时的 `face=` 元数据),自动生成
     `profiles.<face> = [ base + source ]` 与子命令入口 `dsh <face>` ——
@@ -178,12 +188,10 @@ HM 的 `mkForce`:语义不可删除,但出现即设计缺口信号。
 **所有 profile** 的用户 patch 层:两棵树里的同 id 行都被翻掉,没有该行的
 树 warn+skip —— 一行声明天然覆盖多源,无需 per-face 重复。
 
-**face 树 ≠ profile 树:base 垫在所有 profile 下面**(实测
-`profiles/tui/package.json` bundles = `[dsh-base, dsh-tui]`)。dsh-tui 自带
-树不建立在 dsh-base 上、必须自带全套运行时行,但 tui **profile** 的最终
-树 = base 全套行 + tui 树叠层(同 id 后行胜出)——`llm-pi-ai`/`web`/
-`web-search-deepseek`/`tool-web` 在三个 face 的最终树里都在。判据与
-禁用永远对着**最终树**说话,单包树只是层的来源。
+**face 树 ≠ profile 树,判据永远对着最终树说话**(组合规律见语义模型:
+交互面 profile = base 全套行 + face 树叠层,三 face 实测一致)。dsh-tui
+自带树不建立在 dsh-base 上、必须自带全套运行时行,但 tui profile 的
+最终树里 base 行都在 —— 单包树只是层的来源,行归属哪个包无关紧要。
 
 **空载荷代价决定禁用态是否值得**(配置承载型内部仍有差异,源码实证):
 `llm-pi-ai` 空 providers = `directoryEntries()` 零注册,无可观测面 ——
