@@ -104,6 +104,16 @@ in
         RestartSec = 5;
         # wrapper 自身 export DSH_HOME($HOME 在 user service 环境可用)
         EnvironmentFile = cfg.environmentFiles;
+        # bundle 指纹:profile 组合(in-box 开关/插件集)变化 → unit 变化 →
+        # HM 重启服务。组合树只在 boot 时加载,settings.yaml 热重载覆盖不到
+        # 条目级变化 —— 没有指纹,改 inBoxPlugins/plugins 后运行中的 web
+        # 服务仍是旧树(已踩坑:llm-deepseek 禁用不生效直到手动重启)
+        Environment =
+          let
+            fingerprint = lib.concatStringsSep " "
+              (lib.mapAttrsToList (n: b: "${n}=${toString b}") profileBundles);
+          in
+          [ "DSH_PROFILE_FINGERPRINT=${fingerprint}" ];
       };
       Install = lib.mkIf cfg.web.autoStart {
         WantedBy = [ "default.target" ];
