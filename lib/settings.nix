@@ -127,13 +127,15 @@ let
 
   # agent 预设源校验(rc.5 dsh-agent-presets 实测):目录须含组合文件
   # agent.cordis.yml(preset.yml 元数据/.mjs 插件可选)。纯文件零构建,
-  # 上游热发现免重启 —— 物化即生效
+  # 上游热发现免重启 —— 物化即生效。
+  # 返回 { name → toString source }(string/derivation 归一为字符串路径,
+  # buildPreset 的 toString 消费端统一)
   validatePresets = presets:
     mapAttrs
       (name: p:
         if !builtins.pathExists "${toString p.source}/agent.cordis.yml" then
           throw "programs.dsh.presets.${name}.source: agent.cordis.yml missing in ${toString p.source} (a preset directory = agent.cordis.yml + optional preset.yml and .mjs plugins)"
-        else p.source)
+        else toString p.source)
       presets;
 
   # skill 源校验(dsh-skill-filesystem 实测):单文件 .md 或目录束(目录
