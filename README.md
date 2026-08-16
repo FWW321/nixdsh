@@ -469,6 +469,24 @@ GitHub PAT ×1、Context7 key ×1;对应 store bundle 三份均只有
 env-indirection(如通用 `headers.<k>.env`),物化层即可退到纯路径
 引用,明文归零。
 
+### secretFile 声明内 env 桥(第二条通道)
+
+env 型凭证(apiKeyEnv 消费者:llm 路由、webSearch 后端)有独立通道,
+**不落 patch 文件,全程零明文**:`providers.<id>.secretFile` /
+`webSearchProviders.<id>.row.secretFile` 声明后,wrapper 每次启动
+现读文件 export —— 密钥来源与消费者同处一行,CLI/TUI/headless/
+web 服务统一入口,无需 bash initExtra/EnvironmentFile 两条外部桥。
+
+- env 名 = 显式 `apiKeyEnv` > **文件名大写约定**
+  (`/run/secrets/zhipu_api_key` → `ZHIPU_API_KEY`);派生值同时渲染
+  进行 config/路由(行自描述,不是猜上游默认 —— 同一派生喂 export
+  与行,不存在猜错形态)
+- 同 env 多声明:同文件去重(一个 ZHIPU_API_KEY 喂 LLM 路由 + 搜索
+  后端),不同文件 → 求值期 throw(配置漂移)
+- 文件缺失 → 不 export,provider 按请求报结构化错误(上游惰性设计;
+  与 MCP 通道 fail-loud 语义不同:那里注入不齐 boot 必炸)
+- 轮换即生效:每次调用现读,优于 EnvironmentFile 的启动快照
+
 ## API 一览
 
 | Flake output | 内容 |
