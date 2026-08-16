@@ -173,11 +173,23 @@ HM 的 `mkForce`:语义不可删除,但出现即设计缺口信号。
 **多源行是常态,判据与禁用机制均来源无关**。同一行 id 可同时存在于
 多棵树(实测 rc.6:`llm-deepseek` 在 dsh-base/cordis.patch.yml:450 有一
 份中性默认,在 dsh-tui/cordis.yml:73 又有一份强意见默认 ——
-`thinking: enabled` + `reasoningEffort: max`;TUI 自带独立树、不建立在
-dsh-base 上,必须自带全套运行时行)。行归属哪个包无关紧要,判据只看
-"这行是否未经你的声明就在树上"。因此 `inBoxPlugins` 的禁用行进**所有
-profile** 的用户 patch 层:两棵树里的同 id 行都被翻掉,没有该行的树
-warn+skip —— 一行声明天然覆盖多源,无需 per-face 重复。
+`thinking: enabled` + `reasoningEffort: max`)。行归属哪个包无关紧要,判据
+只看"这行是否未经你的声明就在树上"。因此 `inBoxPlugins` 的禁用行进
+**所有 profile** 的用户 patch 层:两棵树里的同 id 行都被翻掉,没有该行的
+树 warn+skip —— 一行声明天然覆盖多源,无需 per-face 重复。
+
+**face 树 ≠ profile 树:base 垫在所有 profile 下面**(实测
+`profiles/tui/package.json` bundles = `[dsh-base, dsh-tui]`)。dsh-tui 自带
+树不建立在 dsh-base 上、必须自带全套运行时行,但 tui **profile** 的最终
+树 = base 全套行 + tui 树叠层(同 id 后行胜出)——`llm-pi-ai`/`web`/
+`web-search-deepseek`/`tool-web` 在三个 face 的最终树里都在。判据与
+禁用永远对着**最终树**说话,单包树只是层的来源。
+
+**空载荷代价决定禁用态是否值得**(配置承载型内部仍有差异,源码实证):
+`llm-pi-ai` 空 providers = `directoryEntries()` 零注册,无可观测面 ——
+`providers` 默认 `{}` 即"默认启用·惰性",无需禁用态;`llm-deepseek` 空
+载荷 = `DEFAULT_MODELS` catalog(v4-flash/pro)无条件注册,无 key 即死
+UI 条目 —— 未声明禁用有实益。
 
 配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
 启用必显式 —— 给配置(声明即启用)或显式 enable(为纯运行时配置留位)。
