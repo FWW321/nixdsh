@@ -185,13 +185,25 @@ let
     let
       # 省略 null/空的字段;settings 逃生口最后并(未 typed 字段直通)。
       # `or` 缺省:renderSettings 可脱离 module system 直接调用(checks/测试)
-      renderProvider = p:
+      # models 行缺 name 时补 "<供应商显示名>/<id>":上游回落是裸 id
+      # (实测 rc.5 dsh-llm-pi-ai:name ?? catalog 基名 ?? id),多路由同名
+      # 模型在 /model 无法区分;显式 name 原样保留,modelOverrides 不补
+      # (其语义就是只改指定字段,catalog 模型已有可读基名)
+      renderProvider = key: p:
+        let
+          # submodule 里 displayName 恒存在(default null),`or` 不触发,须显式判空
+          display = p.displayName or null;
+          label = if display == null then key else display;
+          models = map
+            (m: if m ? name then m else m // { name = "${label}/${m.id}"; })
+            (p.models or [ ]);
+        in
         (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
           apiKeyEnv = p.apiKeyEnv or null;
           displayName = p.displayName or null;
           api = p.api or null;
           baseURL = p.baseURL or null;
-          models = p.models or [ ];
+          inherit models;
           modelOverrides = p.modelOverrides or { };
           retryPolicy = p.retryPolicy or { };
           defaultContextWindow = p.defaultContextWindow or null;
@@ -210,7 +222,7 @@ let
     // (
       if providers == { } then { } else {
         "llm-pi-ai" = nsBase // {
-          providers = freeformProviders // (mapAttrs (_: renderProvider) providers);
+          providers = freeformProviders // (mapAttrs (k: renderProvider k) providers);
         };
       }
     )

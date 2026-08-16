@@ -166,8 +166,9 @@ in
             ];
             description = ''
               模型清单(整表替换 catalog)。行内键:id 必给;name/contextWindow/
-              maxTokens/compat/reasoningEfforts 按需。空列表 = 沿用上游
-              catalog(catalog 路由的默认行为)。
+              maxTokens/compat/reasoningEfforts 按需。行缺 name 时自动补
+              "<displayName 或路由名>/<id>"(/model 里的可读标识;显式 name 优先)。
+              空列表 = 沿用上游 catalog(catalog 路由的默认行为)。
             '';
           };
           modelOverrides = lib.mkOption {

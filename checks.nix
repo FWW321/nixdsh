@@ -188,12 +188,17 @@ in
             apiKeyEnv = "DEEPSEEK_API_KEY";
             displayName = null;
             retryPolicy = { };
+            models = [ { id = "deepseek-chat"; } ];
           };
           zhipu-coding-plan = {
             apiKeyEnv = "ZHIPU_API_KEY";
+            displayName = "Zhipu Coding";
             api = "anthropic-messages";
             baseURL = "https://open.bigmodel.cn/api/anthropic";
-            models = [ { id = "glm-4.7"; contextWindow = 200000; } ];
+            models = [
+              { id = "glm-4.7"; contextWindow = 200000; }
+              { id = "glm-5.3"; name = "GLM 5.3"; }
+            ];
           };
         };
       };
@@ -205,6 +210,9 @@ in
         (assert' (!provs.deepseek ? displayName) "dsh-providers-render: null fields must be omitted")
         (assert' (!provs.deepseek ? retryPolicy) "dsh-providers-render: empty attrs must be omitted")
         (assert' (provs ? "zhipu-coding-plan") "dsh-providers-render: hand-declared route must render")
+        (assert' ((builtins.elemAt provs.deepseek.models 0).name == "deepseek/deepseek-chat") "dsh-providers-render: model name must default to route key/id when displayName is null")
+        (assert' ((builtins.elemAt provs."zhipu-coding-plan".models 0).name == "Zhipu Coding/glm-4.7") "dsh-providers-render: model name must default to displayName/id")
+        (assert' ((builtins.elemAt provs."zhipu-coding-plan".models 1).name == "GLM 5.3") "dsh-providers-render: explicit model name must win")
         (assert' (provs ? other-gateway) "dsh-providers-render: freeform sibling providers must survive")
         (assert' (rendered.telemetry.mode == "off") "dsh-providers-render: telemetry merge must still hold")
         (assert' (rendered."agent-default-model".provider == "zhipu-coding-plan") "dsh-providers-render: typed defaultModel must render")
