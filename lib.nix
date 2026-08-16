@@ -601,8 +601,8 @@ let
           # 属上游 per-face 行为而非冲突)
           _usageAssert =
             let
-              # 注意括号:`inbox "x".enable` 会被解析为 `inbox ("x".enable)`
-              # —— 对字符串取属性,正是 "expected a set but found a string"
+              inbox = id: (cfg.inBoxPlugins or { }).${id} or { enable = null; };
+              # 中间绑定而非 `inbox "x".enable` 直连:避免选择器解析歧义
               skillProvider = inbox "skill-filesystem";
               presetRoster = inbox "agent-presets";
             in
