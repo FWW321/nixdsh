@@ -302,11 +302,47 @@ let
         if p.source != null then p.source
         else if pkgs ? dshPlugins && pkgs.dshPlugins ? ${name} then pkgs.dshPlugins.${name}
         else throw "programs.dsh.plugins.${name}: no source given and '${name}' not in pkgs.dshPlugins (add it to plugins/names.txt and run the updater, or set source)";
+      # 交互面插件 → 自动 profile(base + 本源)。face 插件互斥不参与分发
+      # (进其他树 = duplicate entry / TTY 致死,均实测),功能插件分发到
+      # 所有 face(profiles = [] 缺省语义含自动生成的 face)
+      facePlugins =
+        let
+          enabled = lib.filterAttrs (_: p: p.enable && p.face != null) cfg.plugins;
+          faceName = name: p: if p.face == true then name else p.face;
+          faceNames = lib.attrValues (lib.mapAttrs faceName enabled);
+          _dupAssert =
+            if builtins.length faceNames != builtins.length (lib.unique faceNames) then
+              throw "programs.dsh.plugins: duplicate face names (${concatStringsSep ", " faceNames})"
+            else null;
+          gen = lib.mapAttrs'
+            (name: p:
+              let fname = faceName name p; in
+              lib.nameValuePair fname (
+                if p.source == null then
+                  throw "programs.dsh.plugins.${name}: face plugin requires an explicit source"
+                else if p.profiles != [ ] then
+                  throw "programs.dsh.plugins.${name}: face plugin cannot also list target profiles (faces are mutually exclusive trees)"
+                else if builtins.elem fname (attrNames cfg.profiles) then
+                  throw "programs.dsh: face '${fname}' conflicts with explicitly declared profiles.${fname}"
+                else {
+                  plugins = [ "@deepseek-ai/dsh-base" p.source ];
+                  userPatchesFile = null;
+                  userPatches = [ ];
+                }
+              ))
+            enabled;
+        in
+        builtins.seq _dupAssert gen;
+      allProfileNames = (attrNames cfg.profiles) ++ (attrNames facePlugins);
       targetsFor = p:
-        if p.profiles == [ ] then attrNames cfg.profiles
-        else filter (n: builtins.elem n (attrNames cfg.profiles)) p.profiles;
+        if p.profiles == [ ] then allProfileNames
+        else filter (n: builtins.elem n allProfileNames) p.profiles;
       patchRows = p:
-        (lib.optional (p.settings != { }) { id = p.patchId; config = p.settings; })
+        (lib.optional (p.settings != { }) (
+          if p.patchId == null then
+            throw "programs.dsh.plugins: settings given but patchId is null"
+          else { id = p.patchId; config = p.settings; }
+        ))
         ++ p.patches;
       contributions = mapAttrsToList
         (name: con: {
@@ -314,7 +350,7 @@ let
           plugin = { inherit name; source = sourceOf name con; };
           patches = patchRows con;
         })
-        (lib.filterAttrs (_: p: p.enable) cfg.plugins);
+        (lib.filterAttrs (_: p: p.enable && p.face == null) cfg.plugins);
       # in-box 条目行(全局,进所有 profile 的用户 patch 层;行级 disabled 键
       # 是 cordis loader 原生语义,实测可双向覆盖 bundle 层的 disabled)
       inBoxPatches =
@@ -328,7 +364,10 @@ let
     {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜出)
       inherit inBoxPatches;
-      # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后)
+      # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
+      inherit facePlugins;
+      # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
+      # 覆盖显式 profile 与自动 face 两类)
       perProfile = listToAttrs
         (map
           (profileName: nameValuePair profileName {
@@ -340,7 +379,7 @@ let
                 (filter (c: builtins.elem profileName c.profiles) contributions))
               ++ inBoxPatches;
           })
-          (attrNames cfg.profiles));
+          allProfileNames);
     };
 
   # nixvim 式独立实例化:不依赖 HM/NixOS eval,即可求值出一个绑定配置的 dsh
@@ -360,6 +399,7 @@ let
       cfg = evaluated.config.programs.dsh;
       wrapper = renderWrapper { inherit cfg pkgs; };
       applied = applyPlugins { inherit cfg pkgs; };
+      allProfiles = cfg.profiles // applied.facePlugins;
       withPlugins = name: p:
         let inc = applied.perProfile.${name} or { extraPlugins = [ ]; extraPatches = [ ]; }; in
         {
@@ -372,7 +412,7 @@ let
           inherit pkgs;
           profile = mkProfile { inherit name; } // (withPlugins name p);
         })
-        cfg.profiles;
+        allProfiles;
     in
     {
       inherit (evaluated) config options;

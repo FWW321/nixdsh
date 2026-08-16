@@ -33,6 +33,65 @@ let
     "@deepseek-ai/dsh-web-app"
   ];
 
+  # face 自动 profile:plugins.<name>.face 生成 [base+source] 树;
+  # face 不参与分发;功能插件 profiles=[] 分发到所有 face(含自动生成的)
+  dsh-face-gen =
+    let
+      r = dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          profiles = { };
+          plugins = {
+            "web-app" = {
+              enable = true;
+              face = "web";
+              source = "@deepseek-ai/dsh-web-app";
+              profiles = [ ];
+              settings = { };
+              patches = [ ];
+              patchId = null;
+            };
+            "dsh-tui" = {
+              enable = true;
+              face = "tui";
+              source = ./checks.nix; # 形状检查:任意源即可
+              profiles = [ ];
+              settings = { };
+              patches = [ ];
+              patchId = null;
+            };
+            # 功能插件:分发到所有 face
+            "status-rotator" = {
+              enable = true;
+              face = null;
+              source = "/tmp/nonexistent-rotator";
+              profiles = [ ];
+              settings = { };
+              patches = [ ];
+              patchId = null;
+            };
+          };
+          inBoxPlugins = { };
+        };
+      };
+      web = r.facePlugins.web or null;
+      tui = r.facePlugins.tui or null;
+      assert' = cond: msg: pkgs.lib.assertMsg cond msg;
+      assertions = toString [
+        (assert' (web != null && builtins.elemAt web.plugins 0 == "@deepseek-ai/dsh-base"
+          && builtins.elemAt web.plugins 1 == "@deepseek-ai/dsh-web-app")
+          "dsh-face-gen: web face must be [base, web-app]")
+        (assert' (tui != null && builtins.length tui.plugins == 2)
+          "dsh-face-gen: tui face must be [base, source]")
+        (assert' (r.perProfile ? web && r.perProfile ? tui)
+          "dsh-face-gen: perProfile must cover auto faces")
+        (assert' (builtins.length r.perProfile.web.extraPlugins == 1
+          && builtins.length r.perProfile.tui.extraPlugins == 1)
+          "dsh-face-gen: function plugin must distribute to every face")
+      ];
+    in
+    pkgs.runCommand "dsh-face-gen-check" { } (builtins.seq assertions "touch $out");
+
   # inBoxPlugins 双向渲染:disable/enable/config 三态行落进 bundle patch
   inBoxRows =
     let
@@ -69,6 +128,8 @@ let
   '';
 in
 {
+  dsh-face-gen = dsh-face-gen;
+  dsh-inbox-rows = inBoxRows;
   dsh-profile-structure = pkgs.runCommand "dsh-profile-structure-check"
     { nativeBuildInputs = [ pkgs.jq ]; } ''
       bundle=${goodProfile}

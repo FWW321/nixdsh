@@ -20,8 +20,10 @@ let
     name = cfg.binName;
   };
 
-  # typed 插件层增量 + in-box 条目行 + 原始 profile 声明 → 最终 profile
+  # typed 插件层增量 + in-box 条目行 + 原始 profile 声明 + face 自动 profile
+  # → 最终 profile
   applied = dshLib.applyPlugins { inherit cfg pkgs; };
+  allProfiles = cfg.profiles // applied.facePlugins;
   finalProfiles = lib.mapAttrs
     (name: p:
       let inc = applied.perProfile.${name} or { extraPlugins = [ ]; extraPatches = [ ]; }; in
@@ -29,7 +31,7 @@ let
         plugins = p.plugins ++ inc.extraPlugins;
         userPatches = p.userPatches ++ inc.extraPatches;
       })
-    cfg.profiles;
+    allProfiles;
 
   profileBundles = lib.mapAttrs
     (name: p: dshLib.buildProfile {
@@ -47,7 +49,7 @@ let
       name = "dsh-${name}";
       fixedProfile = name;
     })
-    cfg.profiles;
+    allProfiles;
 
   # activation:物化不可变 bundle 为可写副本(dsh 每次 boot 改写 profile 根 cordis.yml)
   activateProfile = name: bundle:

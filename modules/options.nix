@@ -261,23 +261,43 @@ in
           enable = lib.mkEnableOption "此 dsh 插件" // {
             default = false;
           };
-          # 插件源:dshPlugins derivation / fetchFromGitHub / path。
+          # 插件源:dshPlugins derivation / fetchFromGitHub / path / in-box 名。
           # 缺省取 pkgs.dshPlugins.<name>(registry 懒式集合,见 plugins/)
           source = lib.mkOption {
-            type = lib.types.nullOr (lib.types.oneOf [ lib.types.path lib.types.package ]);
+            type = lib.types.nullOr (lib.types.oneOf [ lib.types.str lib.types.path lib.types.package ]);
             default = null;
             description = ''
-              插件源 derivation/path。缺省 pkgs.dshPlugins.\<name\>
-              (names.txt 镜像;不在 registry 的插件显式给 fetchFromGitHub 或路径)。
+              插件源 derivation/path;字符串 = in-box bundle 名
+              (@deepseek-ai/dsh-base 等,运行时从 dsh 自身安装解析)。
+              缺省 pkgs.dshPlugins.\<name\>(names.txt 镜像;不在 registry 的
+              插件显式给 fetchFromGitHub 或路径)。
+            '';
+          };
+          # 交互面声明:本插件是一个 UI 入口 bundle → 自动生成同名 profile
+          # (plugins = [ base + 本插件源 ]),并产 dsh-<face> wrapper。
+          # face 插件不参与跨 profile 分发(交互面 bundle 互斥,混树即
+          # duplicate entry / TTY 致死,均实测);功能插件照常分发到所有 face
+          face = lib.mkOption {
+            type = lib.types.nullOr (lib.types.either lib.types.bool lib.types.str);
+            default = null;
+            example = "web";
+            description = ''
+              交互面声明。true = 以本 attr 键名为 face 名;字符串 = 显式
+              face 名(如 in-box web-app 必须叫 "web" —— dsh web 子命令
+              固定 boot 该名的 profile)。生成
+              profiles.\<face\>.plugins = [ "@deepseek-ai/dsh-base" source ],
+              必须给 source。与显式 profiles.\<face\> 声明互斥。
             '';
           };
           patchId = lib.mkOption {
-            type = lib.types.str;
+            type = lib.types.nullOr lib.types.str;
+            default = null;
             description = ''
               cordis patch 行 id。settings 渲染为
               { id = patchId; config = settings; }。
               dsh-base 以 insert 建行,第三方 bundle patch 若 insert 了
               同名行,其 id 即 packageName —— 此时缺省值可用。
+              settings 非空时必给。
             '';
           };
           settings = lib.mkOption {
