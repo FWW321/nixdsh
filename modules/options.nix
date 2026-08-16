@@ -95,10 +95,16 @@ in
             description = "模型 id(须在该 provider 的 models 清单内)";
           };
           reasoningEffort = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
+            # 值域 = 上游 THINKING_LEVELS(实测 rc.5 源码):上游 settings schema
+            # 宽松(z.string()),但请求期 fail("does not support reasoning
+            # effort");enum 把该错误前移到 eval 期。上游加档时此处会
+            # hard-fail —— 那正是 bump 提示
+            type = lib.types.nullOr (lib.types.enum [
+              "off" "minimal" "low" "medium" "high" "xhigh" "max"
+            ]);
             default = null;
             example = "high";
-            description = "推理力度(off/minimal/low/medium/high/max,null 省略)";
+            description = "推理力度七档;null 省略(dsh 用模型默认映射)";
           };
         };
       });
