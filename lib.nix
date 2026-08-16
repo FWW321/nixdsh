@@ -163,17 +163,43 @@ let
         ${concatStringsSep "\n" (map linkPlugin nixPlugins)}
       '';
 
-  # settings 渲染:freeform settings 为底,typed core(telemetry.mode)后合并覆盖
+  # settings 渲染:freeform settings 为底,typed core(telemetry.mode /
+  # providers)后合并覆盖。providers 渲染进 llm-pi-ai 命名空间段 ——
+  # dsh-llm-pi-ai 的用户层(上游:cordis 树 base 配置 ⊕ 本段,按 provider
+  # 深合并,免重启);typed 条目逐 provider 覆盖 freeform 同名条目
   renderSettings =
-    { settings, telemetry }:
+    { settings, telemetry, providers ? { } }:
+    let
+      # 省略 null/空的字段;settings 逃生口最后并(未 typed 字段直通)。
+      # `or` 缺省:renderSettings 可脱离 module system 直接调用(checks/测试)
+      renderProvider = p:
+        (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+          apiKeyEnv = p.apiKeyEnv or null;
+          displayName = p.displayName or null;
+          api = p.api or null;
+          baseURL = p.baseURL or null;
+          models = p.models or [ ];
+          modelOverrides = p.modelOverrides or { };
+          retryPolicy = p.retryPolicy or { };
+          defaultContextWindow = p.defaultContextWindow or null;
+          defaultMaxTokens = p.defaultMaxTokens or null;
+          compat = p.compat or { };
+        }) // (p.settings or { });
+      nsBase = settings.llm-pi-ai or { };
+      freeformProviders = nsBase.providers or { };
+    in
     settings
     // (
-      if telemetry.mode == null then
-        { }
-      else
-        {
-          telemetry = (settings.telemetry or { }) // { mode = telemetry.mode; };
-        }
+      if telemetry.mode == null then { } else {
+        telemetry = (settings.telemetry or { }) // { mode = telemetry.mode; };
+      }
+    )
+    // (
+      if providers == { } then { } else {
+        "llm-pi-ai" = nsBase // {
+          providers = freeformProviders // (mapAttrs (_: renderProvider) providers);
+        };
+      }
     );
 
   # wrapper 渲染(TonyWu20 的 yq-merge 语义 + DSH_HOME):
@@ -191,8 +217,8 @@ let
     let
       effectiveProfile = if fixedProfile != null then fixedProfile else cfg.defaultProfile;
       settingsJSON =
-        if renderSettings { inherit (cfg) settings telemetry; } == { } then null
-        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry; });
+        if renderSettings { inherit (cfg) settings telemetry providers; } == { } then null
+        else builtins.toJSON (renderSettings { inherit (cfg) settings telemetry providers; });
       settingsPrelude = optionalString (settingsJSON != null) ''
         dsh_home="''${DSH_HOME:-$HOME/.dsh}"
 

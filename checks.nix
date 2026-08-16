@@ -81,4 +81,48 @@ in
       }
       touch "$out"
     '';
+
+  # renderSettings 合并语义:typed providers 逐条覆盖 freeform 同名条目、
+  # null/空字段省略、freeform 命名空间其他键与其他 provider 条目保留。
+  # 断言在求值期生效:任一不成立 → check 求值失败(fail-loud 无需构建)
+  dsh-providers-render =
+    let
+      rendered = dshLib.renderSettings {
+        settings = {
+          telemetry.mode = "on";
+          "llm-pi-ai".providers = {
+            deepseek.apiKeyEnv = "FREEFORM_KEY";
+            other-gateway.apiKeyEnv = "OTHER_KEY";
+          };
+        };
+        telemetry = { mode = "off"; };
+        providers = {
+          deepseek = {
+            apiKeyEnv = "DEEPSEEK_API_KEY";
+            displayName = null;
+            retryPolicy = { };
+          };
+          zhipu-coding-plan = {
+            apiKeyEnv = "ZHIPU_API_KEY";
+            api = "anthropic-messages";
+            baseURL = "https://open.bigmodel.cn/api/anthropic";
+            models = [ { id = "glm-4.7"; contextWindow = 200000; } ];
+          };
+        };
+      };
+      provs = rendered."llm-pi-ai".providers;
+      assert' = cond: msg: pkgs.lib.assertMsg cond msg;
+      # 接进 buildCommand 才脱离懒求值(Nix check 求值 drv 属性时强制)
+      assertions = toString [
+        (assert' (provs.deepseek.apiKeyEnv == "DEEPSEEK_API_KEY") "dsh-providers-render: typed must win per-provider")
+        (assert' (!provs.deepseek ? displayName) "dsh-providers-render: null fields must be omitted")
+        (assert' (!provs.deepseek ? retryPolicy) "dsh-providers-render: empty attrs must be omitted")
+        (assert' (provs ? "zhipu-coding-plan") "dsh-providers-render: hand-declared route must render")
+        (assert' (provs ? other-gateway) "dsh-providers-render: freeform sibling providers must survive")
+        (assert' (rendered.telemetry.mode == "off") "dsh-providers-render: telemetry merge must still hold")
+      ];
+    in
+    # seq 强制断言求值(任一失败 → 求值期 fail-loud),buildCommand 本身无操作
+    pkgs.runCommand "dsh-providers-render-check"
+      { } (builtins.seq assertions "touch $out");
 }

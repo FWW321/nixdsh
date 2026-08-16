@@ -75,6 +75,117 @@ in
       description = "typed 便利键:渲染进 settings.telemetry.mode,覆盖 freeform 同名值";
     };
 
+    # ── LLM 供应商路由(dsh-llm-pi-ai 用户层)──────────────────────────
+    # 渲染进 settings.yaml `llm-pi-ai.providers` 命名空间段(cordis 树 base
+    # 配置之上的用户层,上游按 provider 逐项深合并,免重启生效)。
+    # 刻意不做 preset 库:catalog 元数据(models/baseURL/上下文窗口)由上游
+    # pi-ai catalog 持有,catalog 路由只写凭证名即可;手声明路由(如
+    # zhipu coding plan 的 anthropic 兼容端点)显式给全字段。
+    providers = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          apiKeyEnv = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "ZHIPU_API_KEY";
+            description = ''
+              API key 环境变量名(凭证值经环境注入,wrapper 不碰密钥)。
+              null 省略该键(本地无鉴权网关)。
+            '';
+          };
+          displayName = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "UI 显示名(手声明路由可读性;catalog 路由无需)";
+          };
+          api = lib.mkOption {
+            type = lib.types.nullOr (lib.types.enum [ "openai-completions" "openai-responses" "anthropic-messages" ]);
+            default = null;
+            description = ''
+              线协议。catalog 路由继承 catalog 默认无需给;手声明路由必给
+              (缺省视为 openai-completions 仅在 model discovery 场景)。
+            '';
+          };
+          baseURL = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "https://open.bigmodel.cn/api/anthropic";
+            description = ''
+              API 端点。catalog 路由继承;手声明路由必给
+              (含兼容端点,如 zhipu anthropic 兼容层)。
+            '';
+          };
+          models = lib.mkOption {
+            type = lib.types.listOf lib.types.attrs;
+            default = [ ];
+            example = [
+              { id = "glm-4.7"; contextWindow = 200000; maxTokens = 128000; }
+            ];
+            description = ''
+              模型清单(整表替换 catalog)。行内键:id 必给;name/contextWindow/
+              maxTokens/compat/reasoningEfforts 按需。空列表 = 沿用上游
+              catalog(catalog 路由的默认行为)。
+            '';
+          };
+          modelOverrides = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+            description = "对 catalog 既有模型条目的字段覆盖(键 = 模型 id;不能与 models 并用)";
+          };
+          retryPolicy = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+            example = lib.literalExpression ''{ mode = "normal"; maxRetries = 2; }'';
+            description = "重试策略(mode/maxRetries)";
+          };
+          defaultContextWindow = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            description = "路由级缺省上下文窗口(models 行未给时兜底)";
+          };
+          defaultMaxTokens = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            description = "路由级缺省 maxTokens(models 行未给时兜底)";
+          };
+          compat = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+            example = lib.literalExpression ''{ thinkingFormat = "deepseek"; }'';
+            description = "推理方言开关(thinkingFormat/supportsReasoningEffort;仅 openai-completions)";
+          };
+          settings = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+            description = ''
+              逃生口:未 typed 化的上游字段直接并进该 provider 段
+              (rc 阶段 schema 未稳,同 settings freeform 哲学)。
+            '';
+          };
+        };
+      });
+      default = { };
+      example = lib.literalExpression ''
+        {
+          # catalog 路由:只补凭证名,模型/端点全部上游持有
+          deepseek.apiKeyEnv = "DEEPSEEK_API_KEY";
+          # 手声明路由:zhipu coding plan(anthropic 兼容端点)
+          zhipu-coding-plan = {
+            apiKeyEnv = "ZHIPU_API_KEY";
+            api = "anthropic-messages";
+            baseURL = "https://open.bigmodel.cn/api/anthropic";
+            models = [ { id = "glm-4.7"; contextWindow = 200000; maxTokens = 128000; } ];
+          };
+        }
+      '';
+      description = ''
+        LLM 供应商路由声明,渲染进 settings.yaml llm-pi-ai 命名空间段
+        (typed 覆盖 freeform settings.llm-pi-ai 同名 provider 条目)。
+        与 freeform settings 的分工:这里管类型安全与缺省省略,
+        settings.llm-pi-ai 仍可写本层未覆盖的任意键。
+      '';
+    };
+
     environment = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };

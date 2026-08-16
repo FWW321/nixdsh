@@ -33,6 +33,31 @@ programs.dsh = {
 };
 ```
 
+### LLM 供应商
+
+`programs.dsh.providers` 声明多供应商路由,渲染进 settings.yaml 的
+`llm-pi-ai` 命名空间段(dsh-llm-pi-ai 用户层,免重启生效)。catalog 路由
+只补凭证名,端点/模型清单由上游 pi-ai catalog 持有;catalog 没有的端点
+(如 zhipu coding plan 的 anthropic 兼容层)手声明全字段:
+
+```nix
+programs.dsh.providers = {
+  deepseek.apiKeyEnv = "DEEPSEEK_API_KEY";    # catalog 路由
+
+  "zhipu-coding-plan" = {                     # 手声明路由
+    apiKeyEnv = "ZHIPU_API_KEY";
+    api = "anthropic-messages";
+    baseURL = "https://open.bigmodel.cn/api/anthropic";
+    models = [ { id = "glm-4.7"; contextWindow = 200000; maxTokens = 128000; } ];
+  };
+};
+```
+
+凭证值经环境变量注入(`environment` / `home.sessionVariables` / sops),
+wrapper 不落盘密钥。api 取值:`openai-completions` / `openai-responses` /
+`anthropic-messages`;models 整表替换 catalog,modelOverrides 逐模型覆盖。
+
+
 ```sh
 nix profile install github:FWW321/nixdsh   # 或仅 CLI
 nix run github:FWW321/nixdsh#dsh -- web    # 试试
