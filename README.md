@@ -100,6 +100,21 @@ nixdsh/
 3. **插件配置 = cordis patch 用户层**。dsh 官方优先级链:
    base insert → mode bundle → **profile cordis.patch.yml(这里)** → --patch。
    注意 patch 的 config 是**整行替换**不是深合并,覆盖 base 行须重述全部键。
+4. **profile 数量 = 交互面数量(与插件数无关)**。dsh 的交互面 bundle
+   (web-app/headless/第三方 TUI)两两互斥 —— 同树声明会 `duplicate
+   loader entry id` 直接拒绝 boot;TTY-bound 的 TUI 混入 headless 树则
+   `dsh "task"` 全挂(实测)。因此:
+
+   | 轴 | 选项 | 增长方式 | 是否产生 profile |
+   |---|---|---|---|
+   | 供应商/模型/条目开关 | `providers` / `defaultModel` / `inBoxPlugins` | 全局一处 | 否 |
+   | 功能插件 | `plugins.<name>` | `enable = true`(`profiles = []` 缺省全分发) | 否 |
+   | 交互面 | `profiles.<face>` | 每种 UI 入口一个(有界:上游出几种 UI 是几个) | 是 |
+
+   加功能插件 = 一处 `enable`,profile 文件零改动;仅当出现新交互面
+   bundle 才加 profile。base 在每个 profile 显式重复是刻意的 —— plugins
+   是有序全树规格,隐式默认会被显式设置整体替换 → 静默丢 base → boot 期
+   才炸(fail-loud 路径,nobase check 覆盖)。
 
 ## 装插件
 
