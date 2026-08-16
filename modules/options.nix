@@ -6,6 +6,10 @@
 #   typed core 只收 CLI 层确定项(defaultProfile/web 服务)与两源一致确认的
 #   telemetry.mode;settings 整体 freeform(= 逃生口),model/models 等上游
 #   rc 阶段键名未稳(hieutran 写 models、TonyWu20 写 model)不 typed 化
+#
+# 插件形态判别(配置承载/裸用)与三层通道选择纪律见 README
+# 「插件形态与通道选择(设计准则)」—— typed 化决策依据:配置承载型
+# 声明即启用/未声明即禁用,凭据也是配置(eval 期不猜运行时)
 { config, lib, pkgs, ... }:
 
 let
@@ -464,6 +468,11 @@ in
         in-box cordis 条目(dsh-base 等内置树声明的插件)开关与 config
         覆盖。渲染为所有 profile 用户 patch 层的行级 patch(追加在 bundle
         patch 与 typed 插件层之后,同 id 后行胜出)。
+
+        通道选择纪律中的**末选逃生口**(README「插件形态与通道选择」):
+        引用的行 id 是树解剖词汇,上游重组/face 装卸后漂移。配置承载型
+        优先层 1(typed 意图选项)或层 2(settings 命名空间);频繁落在
+        这里 = 层 1 缺 typed 选项的信号。
       '';
     };
 

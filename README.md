@@ -123,6 +123,53 @@ nixdsh/
     显式重复是刻意的 —— plugins 是有序全树规格,隐式默认会被显式设置
     整体替换 → 静默丢 base → boot 期才炸(fail-loud 路径,nobase check 覆盖)。
 
+## 插件形态与通道选择(设计准则)
+
+配置词汇按"意图住在哪里"分层。这不是风格偏好,是防错边界:用错通道
+= 意图耦合到组合树内部结构(face 装卸/上游重组时悬空),或产生"声明了
+7 个 server 又禁用 mcp 插件"这类矛盾态。以下判据经上游源码逐条查证。
+
+### 两形态:无任何载荷时,核心功能是否为零/必败
+
+| 形态 | 判据 | 实测例 |
+|---|---|---|
+| **配置承载型**(value-shaped) | 无配置 → 功能为零或必败。配置 = 声明段/环境变量/credentials 服务,**住址不限** | `mcp-client`(零 server = 零工具)、`skill-filesystem`(空目录 = 空目录)、`web-search-deepseek`(每次搜索必败 `WEB_PROVIDER_CREDENTIAL_MISSING`,严格模式无降级)、`llm-deepseek`(每次请求必败 `MISSING_CREDENTIAL`) |
+| **裸用型**(switch-shaped) | 零配置即完整工作 | `tool-bash`、`tool-fs`、`tool-todo`、`timer` |
+
+- **凭据也是配置**:shell export、Web UI Models 页运行时存储、settings
+  段,一律算。"检测到环境变量就启用"**不在 eval 期做**(impure eval,
+  破坏可重现);在 nix 侧声明凭据来源(secretFile/env wrapper)的动作
+  本身就是启用声明。打算纯运行时配 key → 显式启用,声明责任在配置
+  作者,系统不猜运行时状态(Zig 式无隐式行为)。
+- **"无用"≠"炸 boot"**:上游是惰性设计 —— 注册廉价(不看凭据)、按
+  请求鉴权、使用点报结构化错误(llm-deepseek 的 `apply()` 无条件注册
+  provider,`resolveApiKey` 每请求才解析)。正因不炸,未配置的配置
+  承载型会**静默**占 UI 槽位(模型/工具选择器列出全部已注册条目)并吃
+  prompt 预算(dsh-tool-web README 原话:"每个通过配置启用的工具都会
+  为每次请求增加固定的指引 token 开销,即使限制隐藏了其 schema")。
+  → 未声明即禁用有实益,不只是卫生。
+
+### 通道选择纪律
+
+| 层 | 通道 | 词汇 | 适用 |
+|---|---|---|---|
+| 1 首选 | typed 意图选项:`mcpServers` / `skills` / `presets`(已做)、`webSearch` 等(路线图) | "我要这个能力,这样配" —— 声明即启用,face 无关,载荷物化到共享层 | 载荷在声明里 |
+| 2 次选 | `settings."<命名空间>"` | "调既有能力的参数" —— yq merge 免重启,UI 运行时改动保留 | 树里已有行,只改配置(如 `web-search-deepseek` 的 baseURL/maxUses) |
+| 3 末选 | `inBoxPlugins` / `userPatches` | 树解剖词汇(行 id):修剪 / 反向启用 / 整行 config 重述 | 意图字面就是"树里这行怎么翻" |
+
+层 3 引用的行 id 是组合树内部名字,上游重组树或 face 装卸后漂移;
+配置频繁落在层 3 通常说明层 1 缺一个该有的 typed 选项 —— 性质类似
+HM 的 `mkForce`:语义不可删除,但出现即设计缺口信号。
+
+### 显式原则与落地状态
+
+配置承载型**未声明 = 禁用**是目标姿态(UI 槽位/prompt 预算归零);
+启用必显式 —— 给配置(声明即启用)或显式 enable(为纯运行时配置留位)。
+落地状态:`mcpServers`/`skills`/`presets` 已是此语义;`webSearch` /
+`llmDeepseek` 等 typed 选项在路线图,现由层 2 + 层 3 组合表达
+(如 `inBoxPlugins."llm-deepseek".enable = false` 即"不要 deepseek
+路由"意图暂住层 3 的形态)。
+
 ## 入口
 
 单一 `dsh` wrapper:profile 子命令分发 `dsh <profile>` ≡
