@@ -1,0 +1,12 @@
+# dshPlugins 镜像清单(vimPlugins 的 vim-plugin-names 同构)
+# 格式:每行一个插件:owner/repo [subpath]
+#   - 注释行(#)与空行忽略
+#   - subpath:monorepo 插件取仓库内子目录(awesome 列表的 #path 条目)
+# 版本由 update.sh 解析(tag 优先,无 tag 钉默认分支 HEAD),hash 自动 prefetch,
+# 生成 generated.nix → pkgs.dshPlugins.<packageName>(见 overlay.nix)
+# 更新:nix run .#dsh-plugins-update(或 GitHub Actions 周期 PR)
+#
+# 生态索引:https://github.com/awesome-dsh-plugin/awesome-dsh-plugin
+
+01Virex/dsh-status-rotator
+ccch1mneyyy/dsh-TUI
