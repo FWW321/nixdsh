@@ -441,6 +441,34 @@ profiles.web.userPatches = [
 私有 config.json 类插件(如 status-rotator)运行时写插件目录会因 store
 只读失败,插件自身回退默认;确需改其配置时用此逃生口。
 
+## 密钥生命周期(store 零密钥,物化层明文)
+
+`mcpServers` 的 secret 形态(`{ secretFile; prefix? }`)设计目标是
+**store 工件零密钥**。链条三级(实测 rc.6):
+
+| 级 | 位置 | 内容 | 暴露面 |
+|---|---|---|---|
+| 声明 | nix 配置 + secrets.yaml | `secretFile = "/run/secrets/xxx"`(路径,非值) | git 里全是 ENC[] |
+| store | bundle 的 cordis.patch.yml | 占位符 `@dsh-secret:/run/secrets/xxx@` | world-readable,无密可泄 |
+| 物化 | `~/.config/deepseek-harness/profiles/<name>/cordis.patch.yml` | **真密钥明文**(activation replace-secret 注入) | 0600/fww,home 700 |
+
+物化层明文是**当前最优解,不是缺陷**:上游 mcp 行 schema 的
+headers/env 是字面量 map,没有 env 间接引用字段 —— 运行时子进程要
+真值,boot 前必须落进 patch 文件,能做的只有把权限收到 0600(同
+sops-nix 物化哲学)。对照:exa 插件原生 `apiKeyEnv`(env 间接引用)
+全程零明文 —— wrapper export + scrubbedParentEnv 下显式 env 是官方
+凭证通道,这是上游插件 schema 的能力差异,不是 nixdsh 侧区别。
+
+实测(本机 web/tui/headless 三份物化 patch):Zhipu key ×5 处
+(web-reader/web-search-prime/zread headers + zai `Z_AI_API_KEY`)、
+GitHub PAT ×1、Context7 key ×1;对应 store bundle 三份均只有
+`/run/secrets/*` 占位符。轮换:改 /run/secrets 源 → 重建(activation
+重读注入);store 不缓存旧值,无残留。
+
+上游化候选(与 Plugins 页动态卡同一批 issue):mcp 行 schema 增加
+env-indirection(如通用 `headers.<k>.env`),物化层即可退到纯路径
+引用,明文归零。
+
 ## API 一览
 
 | Flake output | 内容 |
