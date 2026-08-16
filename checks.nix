@@ -15,7 +15,6 @@ let
   mkBundle = name: plugins:
     dshLib.buildProfile {
       inherit pkgs;
-      hostDsh = pkgs.dsh;
       profile = dshLib.mkProfile { inherit name plugins; };
     };
 

@@ -34,7 +34,6 @@ let
   profileBundles = lib.mapAttrs
     (name: p: dshLib.buildProfile {
       inherit pkgs;
-      hostDsh = cfg.package;
       profile = dshLib.mkProfile {
         inherit name;
         inherit (p) plugins userPatchesFile userPatches;

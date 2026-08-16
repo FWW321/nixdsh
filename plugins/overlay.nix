@@ -103,8 +103,6 @@ let
       passthru = {
         packageName = name;
         dshBundlePatch = e.bundlePatch or null;
-        # peerDependencies 包名列表(buildProfile 据此从宿主 dsh 安装回链)
-        dshPeers = e.peers or [ ];
       };
 
       meta = with lib; {
@@ -120,7 +118,6 @@ let
         passthru = {
           packageName = name;
           dshBundlePatch = e.bundlePatch or null;
-          dshPeers = e.peers or [ ];
         };
         meta = with lib; {
           description = "dsh plugin source: ${e.owner}/${e.repo}@${e.version}";
