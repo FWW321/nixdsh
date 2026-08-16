@@ -334,9 +334,23 @@ rebinding/重定向跳内网);上游立场是 seam 不挡、谁注册谁防护,�
 活动是到 MCP 端点的出站 HTTPS。上游"provider 自负 SSRF 责任"对这类
 provider 平凡满足(不从本地网络抓取,防护清单零条适用)。
 
-nixdsh 侧:fetch 缝暂无 typed 选项(无 provider 可选,管无可管);
-将来落地时照 webSearch/webSearchProviders 同款模式加
-`webFetch`/`webFetchProviders`(缝的对称性预留了这个扩展点)。
+nixdsh 侧:`webFetch`/`webFetchProviders` 已落地(fetch 缝对称选择器,
+镜像 webSearch 语义;差异:fetch 缝无 base 自带后端,选中必声明,且
+模块代开 tool-web 的 `fetch: true` 保险丝 —— 打开动作本身即"信任
+该 provider 的 SSRF 姿态"的显式声明):
+
+```nix
+programs.dsh.webFetch = "zhipu";
+programs.dsh.webFetchProviders.zhipu.row = {
+  name = "@fww/dsh-web-fetch-zhipu";
+  secretFile = "/run/secrets/zhipu_api_key";  # 派生 apiKeyEnv,与
+  # search/providers 同 env 同文件自动去重(一个 ZHIPU_API_KEY 全喂)
+};
+```
+选中渲染三行:insert 后端行 + `web` 行 `fetchProvider` 重述 +
+`tool-web` 行 `fetch: true`;未选中后端禁行(备案待命,同 ws 语义);
+断言:未知 id / 表非空×`webFetch = null` / inBox 禁 tool-web 均
+eval throw。
 
 **已知限制:Web Plugins 页的表单卡是上游硬编码,不随命名空间出现**
 (实测 rc.6,`dsh-client-ui-settings-plugins/client.js`)。Plugins 页
