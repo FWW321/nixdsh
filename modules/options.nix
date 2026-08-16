@@ -183,6 +183,20 @@ in
                     default = { };
                     description = "行引导配置(如 apiKeyEnv;baseURL 等热改项走 settings 段)";
                   };
+                  secretFile = lib.mkOption {
+                    type = lib.types.nullOr lib.types.str;
+                    default = null;
+                    example = "/run/secrets/zhipu_api_key";
+                    description = ''
+                      凭据文件路径(sops 等物化)。声明后 wrapper 启动时读文件
+                      export 环境变量 —— 所有交互面统一(CLI/TUI/headless/web
+                      服务入口都是 wrapper),无需 bash initExtra/EnvironmentFile
+                      两条外部桥。env 名 = row.config.apiKeyEnv 显式值 >
+                      文件名大写约定(zhipu_api_key → ZHIPU_API_KEY);派生
+                      同时渲染 apiKeyEnv 进行 config(行自描述)。同一 env
+                      多声明同文件去重,不同文件 → 求值期 throw。
+                    '';
+                  };
                   settingsNamespace = lib.mkOption {
                     type = lib.types.nullOr lib.types.str;
                     default = null;
@@ -270,7 +284,19 @@ in
             example = "ZHIPU_API_KEY";
             description = ''
               API key 环境变量名(凭证值经环境注入,wrapper 不碰密钥)。
-              null 省略该键(本地无鉴权网关)。
+              null 省略该键(本地无鉴权网关);给了 secretFile 且此处
+              null → 从文件名派生(大写约定)。
+            '';
+          };
+          secretFile = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "/run/secrets/zhipu_api_key";
+            description = ''
+              凭据文件路径(sops 等物化)。声明后 wrapper 启动时读文件
+              export 环境变量(所有交互面统一入口);env 名 = apiKeyEnv
+              显式值 > 文件名大写约定,派生值同时渲染进本路由的
+              apiKeyEnv。同 env 多声明去重,不同文件 → 求值期 throw。
             '';
           };
           displayName = lib.mkOption {

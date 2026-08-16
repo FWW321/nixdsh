@@ -324,6 +324,119 @@ let
           row.name = "@tonydua/dsh-web-search-exa";
         };
       }) "capability: webSearchProviders non-empty + webSearch = null must throw (declared backends would never run)")
+      # secretFile 冲突:两个 providers 声明派生同一 env 但文件不同 → throw
+      (tryThrow (_: dshLib.secretEnv {
+        cfg = {
+          providers = {
+            a.secretFile = "/run/secrets/x_key";
+            b.secretFile = "/run/secrets/other_x_key";
+          };
+        };
+      }) "secretEnv: same derived env from different files must throw")
+    ]) "touch $out");
+
+  # secretFile 桥:声明 → 行 config 派生 apiKeyEnv(行自描述)+ wrapper
+  # 恰好一个 export(跨声明去重)。真模块 eval(mkDsh)+ 真 wrapper 文本
+  secretEnvBridge =
+    let
+      # 行侧:webSearch 选中后端 row 只给 secretFile(无 apiKeyEnv)
+      applied = dshLib.applyPlugins {
+        inherit pkgs;
+        cfg = {
+          plugins = { };
+          profiles = { default = { }; };
+          inBoxPlugins = { };
+          webSearch = "exa";
+          webSearchProviders.exa = {
+            row = {
+              name = "@tonydua/dsh-web-search-exa";
+              secretFile = "/run/secrets/exa_api_key";
+            };
+          };
+        };
+      };
+      exaRow = builtins.head
+        (pkgs.lib.filter (r: r.id == "web-search-exa") applied.wsProviderRows);
+      # providers 侧:显式 apiKeyEnv + secretFile(经典配对)
+      st = dshLib.renderSettings {
+        settings = { };
+        telemetry = { mode = null; };
+        webSearch = null;
+        webSearchProviders = { };
+        llmDeepseek = null;
+        providers."zhipu-coding-plan" = {
+          apiKeyEnv = "ZHIPU_API_KEY";
+          secretFile = "/run/secrets/zhipu_api_key";
+          api = "anthropic-messages";
+          baseURL = "https://example.invalid";
+          models = [ { id = "glm-4.7"; contextWindow = 200000; maxTokens = 128000; } ];
+        };
+        defaultModel = null;
+      };
+      # 收集器:exa row(派生 EXA_API_KEY)+ zhipu 路由(显式)→ 两键
+      table = dshLib.secretEnv {
+        cfg = {
+          webSearch = "exa";
+          webSearchProviders.exa = {
+            row = {
+              name = "@tonydua/dsh-web-search-exa";
+              secretFile = "/run/secrets/exa_api_key";
+            };
+          };
+          providers."zhipu-coding-plan" = {
+            apiKeyEnv = "ZHIPU_API_KEY";
+            secretFile = "/run/secrets/zhipu_api_key";
+          };
+        };
+      };
+      # 去重:ws zhipu row(派生)+ providers 路由(显式)同 env 同文件 → 单键
+      tableDedup = dshLib.secretEnv {
+        cfg = {
+          webSearch = "zhipu";
+          webSearchProviders.zhipu.row = {
+            name = "@fww/dsh-web-search-zhipu";
+            secretFile = "/run/secrets/zhipu_api_key";
+          };
+          providers."zhipu-coding-plan" = {
+            apiKeyEnv = "ZHIPU_API_KEY";
+            secretFile = "/run/secrets/zhipu_api_key";
+          };
+        };
+      };
+      # 真 wrapper(mkDsh 全模块 eval):文本断言 export 恰好一次
+      wrapperText = let
+        inst = dshLib.mkDsh {
+          inherit pkgs;
+          modules = [{
+            programs.dsh.webSearch = "exa";
+            programs.dsh.webSearchProviders.exa.row = {
+              name = "@tonydua/dsh-web-search-exa";
+              secretFile = "/run/secrets/exa_api_key";
+            };
+            programs.dsh.providers."zhipu-coding-plan" = {
+              apiKeyEnv = "ZHIPU_API_KEY";
+              secretFile = "/run/secrets/zhipu_api_key";
+            };
+          }];
+        };
+      in builtins.readFile "${toString inst.wrapper}/bin/dsh";
+      exportCount = builtins.length (pkgs.lib.filter (l: builtins.match ''.*export (EXA_API_KEY|ZHIPU_API_KEY)=".*'' l != null)
+        (pkgs.lib.splitString "\n" wrapperText));
+    in
+    pkgs.runCommand "dsh-secret-env-bridge-check" { } (builtins.deepSeq ([
+      (pkgs.lib.assertMsg (exaRow.config.apiKeyEnv == "EXA_API_KEY")
+        "secretEnv: row.secretFile must derive apiKeyEnv into row config (self-describing)")
+      (pkgs.lib.assertMsg (st ? "llm-pi-ai"
+        && st."llm-pi-ai".providers."zhipu-coding-plan".apiKeyEnv == "ZHIPU_API_KEY")
+        "secretEnv: provider secretFile pairing must keep explicit apiKeyEnv in settings")
+      (pkgs.lib.assertMsg (table ? EXA_API_KEY && table ? ZHIPU_API_KEY
+        && table.EXA_API_KEY == "/run/secrets/exa_api_key"
+        && table.ZHIPU_API_KEY == "/run/secrets/zhipu_api_key")
+        "secretEnv: collector must return both env→file entries")
+      (pkgs.lib.assertMsg (builtins.attrNames tableDedup == [ "ZHIPU_API_KEY" ])
+        "secretEnv: same env+file across declarations must dedup to one export")
+      (pkgs.lib.assertMsg (exportCount == 2)
+        "secretEnv: wrapper must export exactly 2 env vars (EXA + ZHIPU), got ${toString exportCount}")
     ]) "touch $out");
 
   # exa 后端端到端:选中 exa 的 profile bundle 真 boot,web-search-exa 条目
@@ -433,6 +546,7 @@ in
   dsh-capability-clash = capabilityClash;
   dsh-exa-in-tree = dsh-exa-in-tree;
   dsh-zhipu-in-tree = dsh-zhipu-in-tree;
+  dsh-secret-env-bridge = secretEnvBridge;
   dsh-profile-structure = pkgs.runCommand "dsh-profile-structure-check"
     { nativeBuildInputs = [ pkgs.jq ]; } ''
       bundle=${goodProfile}

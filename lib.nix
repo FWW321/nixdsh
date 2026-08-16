@@ -23,10 +23,12 @@ let
     any
     attrNames
     attrValues
+    baseNameOf
     concatMap
     concatStringsSep
     escapeShellArg
     filter
+    foldl'
     getExe
     listToAttrs
     mapAttrs
@@ -52,6 +54,50 @@ let
     "@deepseek-ai/dsh-web-app" = "web";
     "@deepseek-ai/dsh-headless" = "headless";
   };
+
+  # secretFile 声明的 env 名派生约定:/run/secrets/zhipu_api_key →
+  # ZHIPU_API_KEY(文件名大写)。派生不是猜上游默认 —— 它同时定义并
+  # 渲染 apiKeyEnv 进行 config/路由,行自描述,不存在"猜错"形态;
+  # 不符约定的文件名 → 显式写 apiKeyEnv。
+  secretEnvName = f: lib.toUpper (baseNameOf f);
+
+  # 密钥 env 收集:providers 全表 + webSearch 选中后端 row 的 secretFile
+  # 声明 → { env = file; }(wrapper export 清单)。同 env 多声明:
+  # 同文件去重(一个 ZHIPU_API_KEY 喂所有消费者),不同文件 → throw
+  # (配置漂移,fail-loud)。独立于 renderSettings,可被 stub cfg 直调。
+  secretEnv =
+    { cfg }:
+    let
+      wsSel = cfg.webSearch or null;
+      wsDecl = if wsSel == null then null else (cfg.webSearchProviders or { }).${wsSel} or null;
+      wsRow =
+        if wsDecl != null && (wsDecl.row.secretFile or null) != null then [
+          {
+            env = (wsDecl.row.config or { }).apiKeyEnv or (secretEnvName wsDecl.row.secretFile);
+            file = wsDecl.row.secretFile;
+          }
+        ] else [ ];
+      provTable = if (cfg.providers or null) == null then { } else cfg.providers;
+      provs = filter
+        (p: (p.secretFile or null) != null)
+        (attrValues provTable);
+      entries =
+        wsRow
+        ++ map
+          (p: {
+            env = if (p.apiKeyEnv or null) != null then p.apiKeyEnv else secretEnvName p.secretFile;
+            file = p.secretFile;
+          })
+          provs;
+    in
+    foldl'
+      (acc: e:
+        if acc ? ${e.env} then
+          (if acc.${e.env} == e.file then acc
+           else throw "programs.dsh: secretFile conflict — env '${e.env}' declared with different files (${acc.${e.env}} vs ${e.file}); align the declarations")
+        else acc // { ${e.env} = e.file; })
+      { }
+      entries;
 
   mkPlugin =
     {
@@ -201,7 +247,12 @@ let
             (p.models or [ ]);
         in
         (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
-          apiKeyEnv = p.apiKeyEnv or null;
+          # secretFile 派生:显式 apiKeyEnv 优先,缺省从文件名派生(自描述)
+          apiKeyEnv =
+            let env = p.apiKeyEnv or null; in
+            if env != null then env
+            else if (p.secretFile or null) != null then secretEnvName p.secretFile
+            else null;
           displayName = p.displayName or null;
           api = p.api or null;
           baseURL = p.baseURL or null;
@@ -444,6 +495,18 @@ let
         (mapAttrsToList
           (n: v: "export ${n}=${escapeShellArg v}")
           cfg.environment);
+      # secretFile 声明的 env 桥(文件 → 环境变量):每次 wrapper 调用现读,
+      # 轮换即生效(优于 EnvironmentFile 的启动快照)。文件缺失 → 不 export,
+      # provider 按请求报结构化错误(上游惰性设计,注册不看凭据)—— 与
+      # MCP 通道 fail-loud 不同:那里 boot 必炸,这里 boot 不炸。
+      # 先于 envPrelude:显式 cfg.environment 覆盖派生值
+      secretEnvPrelude = concatStringsSep "\n"
+        (mapAttrsToList
+          (env: file: ''
+            if [ -r ${escapeShellArg file} ]; then
+              export ${env}="$(< ${escapeShellArg file})"
+            fi'')
+          (secretEnv { inherit cfg; }));
       # secret 注入块(mcpServers env/headers 占位符 → 真值):每次启动跑,
       # 轮换安全(secret 文件更新即生效);改动物化副本 patch 文件(用户
       # 目录,可 0600),store 工件永不含密钥。secret 文件缺失 → fail-loud
@@ -536,6 +599,7 @@ let
     pkgs.writeShellScriptBin name ''
       set -euo pipefail
       export DSH_HOME="${cfg.dshHome}"
+      ${secretEnvPrelude}
       ${envPrelude}
       dsh_home="${cfg.dshHome}"
       ${secretPrelude}
@@ -834,8 +898,16 @@ let
            rowId =
              if hasRow then (p.row.id or (rowIdOf p.row.name))
              else "web-search-${id}";
-           rowName = if hasRow then p.row.name else null;
-           rowConfig = if hasRow then (p.row.config or { }) else (removeAttrs p [ "settings" "source" ]);
+            rowName = if hasRow then p.row.name else null;
+            # secretFile 派生:行 config 未显式给 apiKeyEnv 时注入派生值
+            #(行自描述,免疫上游默认漂移;显式 apiKeyEnv 优先)
+            rowConfig =
+              let
+                base = if hasRow then (p.row.config or { }) else (removeAttrs p [ "settings" "source" ]);
+              in
+              if hasRow && (p.row.secretFile or null) != null && !(base ? apiKeyEnv) then
+                base // { apiKeyEnv = secretEnvName p.row.secretFile; }
+              else base;
            source = if hasRow then (p.source or null) else null;
            namespace = if hasRow then (p.row.settingsNamespace or null) else "web-search-${id}";
          };
@@ -966,6 +1038,8 @@ in
     validatePresets
     validateSkills
     applyPlugins
+    secretEnvName
+    secretEnv
     mkDsh
     ;
 }
