@@ -257,26 +257,40 @@ Config 非命名空间段,构造器定格)—— 若上游将来支持热切,该
 必禁,独立配置是假自由度)。选中才启用,未选中后端禁行(死卡清理;
 前提:上游无运行时切换,见设计准则的 ⚠ 标记)。
 
+**webSearchProviders 是开放注册表**:选择器指向的注册表开放,新后端
+一条声明接入,零 nixdsh 改动 —— 内置后端与新后端走同一条声明路径
+(预置只是默认值语法糖,不是代码分支)。
+
 ```nix
-# DeepSeek 原生搜索(base 自带后端,零声明;key 走 export DEEPSEEK_API_KEY
-# 或 Web UI Models 页运行时配;无 key 每次搜索必败,严格模式无降级)
+# DeepSeek 原生搜索(base 自带后端:裸 attrs 即参数;key 走 export
+# DEEPSEEK_API_KEY 或 Web UI 运行时配;无 key 每次搜索必败,严格模式无降级)
 programs.dsh.webSearch = "deepseek-official";
-programs.dsh.webSearchProviders."deepseek-official".maxUses = 3;  # 可选参数
+programs.dsh.webSearchProviders."deepseek-official".maxUses = 3;  # 可选
 
 # Exa(社区包 @tonydua/dsh-web-search-exa,registry 收录;无 key 走
-# mcp.exa.ai 匿名兜底,零配置可用;有 key 走 REST更快)
+# mcp.exa.ai 匿名兜底零配置可用,有 key 走 REST)
 programs.dsh.webSearch = "exa";
-programs.dsh.webSearchProviders.exa.apiKeyEnv = "EXA_API_KEY";  # 可选
+programs.dsh.webSearchProviders.exa = {
+  row = {                                # 完整声明 = 非 base 自带后端
+    name = "@tonydua/dsh-web-search-exa";          # cordis 包名
+    config.apiKeyEnv = "EXA_API_KEY";              # 行引导配置
+    # id = "web-search-exa";            # 行 id 缺省 = 包名尾段剥 dsh-
+    # settingsNamespace = "web-search-exa";  # 段名缺省 = web-search-<id>
+  };
+  settings.numResults = 5;               # 该后端 settings 段参数(热生效)
+  # source = pkgs.dshPlugins."…";        # 包源缺省 registry 尾名反查
+};
 
+# 任意私有/新后端:同一条声明语法(row.name 换成你的包)
 # 切换后端 = 改一个字符串(两边声明都在,备案待命)
 ```
 
-机制:选中 deepseek-official → 树行原样 + 参数渲染进 settings 段
-(按次投影热生效);选中 exa → deepseek 后端禁行 + exa insert 行
-(行 config 带声明参数)+ `web` 行重述 `searchProvider` + 包源进所有
-profile(exa 参数走 settings 段 "web-search-exa",@tonydua 版有命名
-空间,热改)。求值期断言:选择 id 须在声明表 ∪ {deepseek-official};
-能力禁 × 声明表非空 → throw。
+机制:选中 base 自带后端 → 树行原样 + 参数渲染进 settings 段(按次
+投影热生效);选中声明后端 → base 后端禁行 + insert 行(行 config =
+row.config)+ `web` 行重述 `searchProvider` + 包源进所有 profile
+(声明 source 或 registry 反查;参数渲染进该后端 settings 段,热改)。
+求值期断言:选择 id 须在声明表 ∪ {deepseek-official};能力禁 ×
+声明表非空 → throw。
 
 **已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
 rc.6)。`webSearch = null` 禁三行(`web`/`web-search-deepseek`/`tool-web`

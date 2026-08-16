@@ -154,30 +154,83 @@ in
     };
 
     webSearchProviders = lib.mkOption {
-      # attrs freeform:键 = provider id,值 = 该后端的配置 attrs。
-      # deepseek-official → settings."web-search-deepseek" 段(热生效);
-      # exa → 行 config(patch 整行替换,rc.1 无 settings 命名空间,
-      # schema 实测于 npm 0.0.1-rc.1 源码)
-      type = lib.types.attrsOf lib.types.attrs;
+      # 开放注册表(README:选择器指向的注册表是开放的):
+      # - 裸 attrs = base 自带后端(deepseek-official)的纯参数
+      # - 完整声明(带 row.name)= 任意新后端,零 nixdsh 改动:
+      #   row.name = cordis 包名;row.id? 缺省 web-search-<尾名>;
+      #   row.config? = 行引导配置;source? = 包源(缺省 registry
+      #   尾名反查);settings = 该后端 settings 段参数;
+      #   row.settingsNamespace? = 段名覆盖(缺省 web-search-<id>)
+      type = lib.types.attrsOf (lib.types.oneOf [
+        lib.types.attrs
+        (lib.types.submodule {
+          options = {
+            row = lib.mkOption {
+              type = lib.types.nullOr (lib.types.submodule {
+                options = {
+                  name = lib.mkOption {
+                    type = lib.types.str;
+                    example = "@tonydua/dsh-web-search-exa";
+                    description = "cordis 包名(insert 行 name;给了 row 即视为非 base 自带后端)";
+                  };
+                  id = lib.mkOption {
+                    type = lib.types.nullOr lib.types.str;
+                    default = null;
+                    description = "行 id 覆盖;null 缺省 web-search-<包名尾段>";
+                  };
+                  config = lib.mkOption {
+                    type = lib.types.attrs;
+                    default = { };
+                    description = "行引导配置(如 apiKeyEnv;baseURL 等热改项走 settings 段)";
+                  };
+                  settingsNamespace = lib.mkOption {
+                    type = lib.types.nullOr lib.types.str;
+                    default = null;
+                    description = "settings 段名覆盖;null 缺省 web-search-<后端 id>";
+                  };
+                };
+              });
+              default = null;
+              description = "null = base 自带后端(纯参数声明);带 name = 新后端完整声明";
+            };
+            source = lib.mkOption {
+              type = lib.types.nullOr (lib.types.oneOf [ lib.types.package lib.types.path ]);
+              default = null;
+              description = ''
+                包源(pkgs.dshPlugins.<name> derivation 或 path);
+                null 缺省 registry 尾名反查(row.id)。
+              '';
+            };
+            settings = lib.mkOption {
+              type = lib.types.attrs;
+              default = { };
+              description = "该后端 settings 命名空间段参数(热生效);仅选中时渲染";
+            };
+          };
+        })
+      ]);
       default = { };
       example = lib.literalExpression ''
         {
-          "deepseek-official".maxUses = 3;          # 单次请求服务器侧搜索上限
+          # base 自带后端:裸 attrs 即参数
+          "deepseek-official".maxUses = 3;
+          # 新后端:完整声明(零 nixdsh 改动接入任意 provider)
           exa = {
-            apiKeyEnv = "EXA_API_KEY";              # exa rc.1: 行 config 级
-            numResults = 5;
+            row = {
+              name = "@tonydua/dsh-web-search-exa";
+              config.apiKeyEnv = "EXA_API_KEY";
+            };
+            settings.numResults = 5;
           };
         }
       '';
       description = ''
-        webSearch 后端声明表。声明 ≠ 启用:仅被 webSearch 选中的后端
+        webSearch 后端声明表(开放注册表:选择器指向的注册表开放,
+        新后端一条声明接入)。声明 ≠ 启用:仅被 webSearch 选中的后端
         在场(README:声明必有效,在场或被选择器解释 —— 备案待命,
-        切换只改 webSearch 一个字符串)。每条按后端类型渲染:
-        deepseek-official → settings."web-search-deepseek" 段
-        (apiKey/apiKeyEnv/baseURL/model/maxUses/...,按次投影热生效);
-        exa → 行 config(apiKey/apiKeyEnv/baseURL/searchType/numResults/
-        highlightsPerResult)。webSearch = null × 本表非空 → 求值期
-        fail-loud(声明了后端却禁能力)。
+        切换只改 webSearch 一个字符串)。渲染约定见各字段;裸 attrs
+        形态 = base 自带后端的纯参数。webSearch = null × 本表非空 →
+        求值期 fail-loud。
       '';
     };
 

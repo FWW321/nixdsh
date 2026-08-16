@@ -210,10 +210,17 @@ let
       # 选中 deepseek-official → 仅 llm-deepseek...不,deepseek 后端行启用,
       # 剩 llm-deepseek(独立选项,未设)禁
       selDeepseek = (mk { webSearch = "deepseek-official"; }).capabilityPatches;
-      # 选中 exa(声明表有)→ deepseek 后端禁 + provider/selector 行 + 包源
+      # 选中 exa(声明表有,完整声明带 row.name)→ deepseek 后端禁 +
+      # provider/selector 行 + 包源
       selExa = (mk {
         webSearch = "exa";
-        webSearchProviders.exa.apiKeyEnv = "EXA_API_KEY";
+        webSearchProviders.exa = {
+          row = {
+            name = "@tonydua/dsh-web-search-exa";
+            config.apiKeyEnv = "EXA_API_KEY";
+          };
+          settings.numResults = 5;
+        };
       });
       selExaRows = selExa.capabilityPatches ++ selExa.wsProviderRows ++ selExa.wsSelectorRow;
       capIds = rows: map (r: r.id) rows;
@@ -232,7 +239,10 @@ let
         settings = { };
         telemetry = { mode = null; };
         webSearch = "exa";
-        webSearchProviders.exa.numResults = 5;
+        webSearchProviders.exa = {
+          row.name = "@tonydua/dsh-web-search-exa";
+          settings.numResults = 5;
+        };
         llmDeepseek = null;
         providers = { };
         defaultModel = null;
@@ -310,7 +320,9 @@ let
       }) "capability: webSearch = exa without a webSearchProviders.exa declaration must throw (not a base backend)")
       (tryThrow (mkApply {
         webSearch = null;
-        webSearchProviders.exa.apiKeyEnv = "EXA_API_KEY";
+        webSearchProviders.exa = {
+          row.name = "@tonydua/dsh-web-search-exa";
+        };
       }) "capability: webSearchProviders non-empty + webSearch = null must throw (declared backends would never run)")
     ]) "touch $out");
 
@@ -326,7 +338,12 @@ let
           profiles = { default = { }; };
           inBoxPlugins = { };
           webSearch = "exa";
-          webSearchProviders.exa.apiKeyEnv = "EXA_API_KEY";
+          webSearchProviders.exa = {
+            row = {
+              name = "@tonydua/dsh-web-search-exa";
+              config.apiKeyEnv = "EXA_API_KEY";
+            };
+          };
         };
       };
       inc = applied.perProfile.default;

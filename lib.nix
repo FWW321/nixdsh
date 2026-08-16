@@ -220,16 +220,29 @@ let
       sectionIf = ns: attrs:
         if attrs == null || attrs == { } then { }
         else { ${ns} = (settings.${ns} or { }) // attrs; };
-      # webSearch 后端参数:deepseek-official → web-search-deepseek 段;
-      # exa → web-search-exa 段(@tonydua 版有 settings 命名空间,热改)。
-      # 仅选中后端的段渲染(未选中行已禁,段无消费者)
+      # webSearch 后端参数:渲染进**选中后端**的 settings 段。段名从声明
+      # 归一(namespace;裸 attrs 声明 = "web-search-<id>" 惯例;base 的
+      # deepseek-official 段名 web-search-deepseek 由惯例覆盖,显式
+      # row.settingsNamespace 优先)。仅选中段渲染(未选中行已禁,段无消费者)
       wsSelected = webSearch;
+      wsSelectedDecl =
+        if wsSelected == null then null
+        else (webSearchProviders.${wsSelected} or { });
+      wsSelectedNs =
+        if wsSelected == "deepseek-official" then "web-search-deepseek"
+        else if wsSelectedDecl ? row && wsSelectedDecl.row ? settingsNamespace then wsSelectedDecl.row.settingsNamespace
+        else "web-search-${wsSelected}";
       wsSettings =
+        let
+          decl = if wsSelected == "deepseek-official"
+            then wsSelectedDecl # 裸 attrs = 参数直渲染
+            else if wsSelectedDecl ? settings then wsSelectedDecl.settings
+            else if wsSelectedDecl ? row && wsSelectedDecl ? row.config then { }
+            else if wsSelectedDecl ? row then { }
+            else wsSelectedDecl;
+        in
         if wsSelected == null then { }
-        else if wsSelected == "deepseek-official" then
-          sectionIf "web-search-deepseek" (webSearchProviders.${wsSelected} or null)
-        else
-          sectionIf "web-search-exa" (webSearchProviders.${wsSelected} or null);
+        else sectionIf wsSelectedNs decl;
     in
     settings
     // (
@@ -799,50 +812,69 @@ let
        # 只会留死卡,禁行无运行时代价。若上游将来把选择 id 接进 settings
        # 热重载(即可运行时切换),此策略应改为"声明即在,选择器热切",
        # 本行组随之收敛为能力骨架行(web/tool-web)。
-       # 后端 id → cordis 行 id(声明表键 = provider id,行 id 另有约定)
-       wsRowId = {
-         "deepseek-official" = "web-search-deepseek";
-         "exa" = "web-search-exa";
-       };
-       baseWsBackends = [ "deepseek-official" ];
        cfgWs = cfg.webSearch or null;
        cfgWsProviders = cfg.webSearchProviders or { };
+       # 后端声明归一:id → { rowId; rowName(null=base 自带); rowConfig;
+       # source(null=base 自带); namespace(null=无 settings 段) }。
+       # 预置 = 默认值里的完整声明(语法糖,非代码分支):新后端接入 =
+       # 一条声明带 row/source,零 nixdsh 改动(开放注册表)
+       wsBackend = id: p:
+         let
+           # 显式声明(带 row.name 的 = 非 base 自带);裸 attrs = base
+           # 自带后端的纯参数声明(向后兼容预置写法)
+           hasRow = p ? row && p.row ? name;
+           # 行 id 缺省 = 包名尾段剥 dsh- 前缀:@tonydua/dsh-web-search-exa
+           # → web-search-exa(与包自 bundle patch 的行 id 约定一致);
+           # 尾段已带 web-search- 前缀则原样,无前缀才补(命名自由的后端)
+           rowIdOf = name:
+             let tail = lib.removePrefix "dsh-" (lib.last (lib.splitString "/" name)); in
+             if lib.hasPrefix "web-search-" tail then tail else "web-search-${tail}";
+         in
+         {
+           rowId =
+             if hasRow then (p.row.id or (rowIdOf p.row.name))
+             else "web-search-${id}";
+           rowName = if hasRow then p.row.name else null;
+           rowConfig = if hasRow then (p.row.config or { }) else (removeAttrs p [ "settings" "source" ]);
+           source = if hasRow then (p.source or null) else null;
+           namespace = if hasRow then (p.row.settingsNamespace or null) else "web-search-${id}";
+         };
+       wsBackends = mapAttrs wsBackend
+         (cfgWsProviders // { "deepseek-official" = cfgWsProviders."deepseek-official" or { }; });
+       # 未选中后端行(声明了但未选中 → 禁行;base 自带的 deepseek 行
+       # 同理:能力禁用或选中别的)
        wsDisable =
         # 骨架:能力禁用时
         (lib.optionals (cfgWs == null) [ "web" "tool-web" ])
-        # base 自带后端行:能力禁用,或选中的不是它
+        # base 自带 deepseek 行:能力禁用,或选中的不是它
         ++ (lib.optionals (cfgWs == null || cfgWs != "deepseek-official")
           [ "web-search-deepseek" ])
-        # 非 base 后端行(声明了但未选中;行 id 来自 wsRowId 表)
-        ++ (lib.filter (id: id != cfgWs && wsRowId ? ${id})
+        # 非 base 后端行(声明了但未选中;有 rowId 的才算得出)
+        ++ (lib.filter (id: id != cfgWs && wsBackends.${id}.rowName != null)
           (attrNames cfgWsProviders));
        capabilityPatches =
-         (map (id: { inherit id; disabled = true; }) wsDisable)
+        (map (id: { inherit id; disabled = true; }) wsDisable)
         ++ (lib.optionals ((cfg.llmDeepseek or null) == null)
           [ { id = "llm-deepseek"; disabled = true; } ])
         ++ (lib.optionals ((cfg.providers or { }) == null)
           [ { id = "llm-pi-ai"; disabled = true; } ]);
-      # exa 后端(@tonydua/dsh-web-search-exa,registry 收录;官方 npm
-      # @deepseek-ai rc.1 无 settings 命名空间且无匿名兜底,选社区版):
-      # 行 id web-search-exa,provider id "exa";有 settings 命名空间
-      # (web-search-exa)→ 参数走 renderSettings 热改,行 config 只需
-      # 引导值。选中即 insert 行 + 包源进 extraPlugins(插件不在 CLI
-      # node_modules,与 MCP 的 dsh-mcp-client 不同——那个是 CLI 自带)
-      wsExaPkgName = "@tonydua/dsh-web-search-exa";
+      # 选中后端(带 row.name = 非 base)→ insert 行;base 自带后端无行
+      #(树里已有)。行 config = 声明的 row.config
       wsProviderRows =
-        (lib.optionals (cfgWs == "exa") [
+        let sel = if cfgWs == null then null else wsBackends.${cfgWs} or null; in
+        lib.optionals (sel != null && sel.rowName != null) [
           {
-            id = "web-search-exa";
-            name = wsExaPkgName;
-            config =
-              (lib.filterAttrs (_: v: v != null && v != { })
-                (cfgWsProviders.exa or { }));
+            id = sel.rowId;
+            name = sel.rowName;
+            config = sel.rowConfig;
           }
-        ]);
-      # 选中非 base 后端 → 包源进 extraPlugins(pkgs.dshPlugins 解析)。
-      # web-search-exa 尾名即包尾名,registryLookup 反查直达
+        ];
+      # 选中后端的包源(非 base 自带才有;声明 source 或 registry 尾名反查)
       wsProviderSources =
-        lib.optional (cfgWs == "exa") (registryLookup "web-search-exa");
+        let sel = if cfgWs == null then null else wsBackends.${cfgWs} or null; in
+        lib.optionals (sel != null && sel.rowName != null)
+          (if sel ? source && sel.source != null && sel != null then [ sel.source ]
+           else [ (registryLookup sel.rowId) ]);
       # 选中非 base 后端 → web 行重述 searchProvider(patch 整行替换,
       # base 行只此一键,重述干净)
       wsSelectorRow =
