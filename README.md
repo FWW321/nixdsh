@@ -160,10 +160,17 @@ programs.dsh.presets.liangshen.source = ./presets/liangshen;
 
 activation 物化到 `$DSH_HOME/.agent-presets/<name>`(stamp 语义同
 profile:未变不动,孤儿自扫)。声明名 Nix 拥有 —— 物化覆盖 TUI 创造
-模式的同名迭代版(`.dsh-tui-managed.json`);**import 工作流**:创造
-模式做原型 → `cp -r ~/.config/deepseek-harness/.agent-presets/<名>`
-进 config 仓库 → 声明 → 之后迭代走仓库。缺 `agent.cordis.yml` 求值期
-fail-loud。与 shipped 预设撞 id 会被上游 root 优先级遮蔽 —— 改名。
+模式的同名迭代版;**import 工作流**:创造模式做原型 → `cp -r
+~/.config/deepseek-harness/.agent-presets/<名>` 进 config 仓库 → 声明
+→ 之后迭代走仓库。缺 `agent.cordis.yml` 求值期 fail-loud。
+
+**勿导入插件 shipped 的预设**(踩过:liangshen 是 dsh-tui 自带的)。
+辨别:副本目录里有 `.dsh-tui-managed.json`(owner = 插件名)即是插件
+管理的同步物 —— 插件更新经此通道自动跟进,导入 = 冻结当前版本,
+遮蔽更新(root 优先级 first-root-wins,两 root 同 id)。shipped 预设
+无需任何声明,插件装了就在;只导入**你自己创造/手写**的预设(无
+managed marker)。与 shipped 预设撞 id 的自建预设会被 root 优先级
+遮蔽 —— 改名。
 
 **方式 A:进 registry(常用插件,nixvim 式零样板)**
 
