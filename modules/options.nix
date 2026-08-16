@@ -566,6 +566,18 @@ in
               与显式 profiles.\<face\> 声明互斥。
             '';
           };
+          excludedPresets = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "liangshen" ];
+            description = ''
+              本插件托管 preset 中**不接管**的 id(黑名单):不接管的
+              preset 走上游自身通道(如 dsh-tui 的 ensurePackagedPresets
+              播种原件),不做能力行重放。排除 id 不在插件探测集内
+              (拼错/上游已删)→ 求值期 throw。与显式
+              presets.\<id\>.source 声明是两条通道,后者恒胜。
+            '';
+          };
           patchId = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;

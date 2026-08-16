@@ -198,6 +198,14 @@ in
       };
       # passthru 源单独验(上面 b disabled)
       foundDeriv = applyDiscover { b = { enable = true; source = derivSrc; }; };
+      # 黑名单:排除 second-one → 只发现 handmade;typo → eval throw
+      foundExcl = applyDiscover {
+        d = { enable = true; source = pathSrc; excludedPresets = [ "second-one" ]; };
+      };
+      typoExcl = builtins.tryEval (builtins.deepSeq
+        (applyDiscover {
+          e = { enable = true; source = pathSrc; excludedPresets = [ "no-such-preset" ]; };
+        }).handmade null);
       # 显式声明胜:同名发现源被显式 presets 覆盖(hm-module 合流序)
       merged = found // { handmade = "/explicit/wins"; };
       assert' = c: m: pkgs.lib.assertMsg c m;
@@ -209,6 +217,10 @@ in
         "preset-discover: disabled plugin's presets must not be discovered")
       (assert' (foundDeriv ? shipped-one)
         "preset-discover: derivation source passthru.dshPresets must be discovered")
+      (assert' (foundExcl ? handmade && !foundExcl ? second-one)
+        "preset-discover: excludedPresets must suppress takeover of the listed preset only")
+      (assert' (!typoExcl.success)
+        "preset-discover: excludedPresets with an id the plugin does not ship must throw at eval time")
       (assert' (merged.handmade == "/explicit/wins")
         "preset-discover: explicit preset declaration must win over discovered")
       (assert' (lib.match ".*/config/agent-presets/standard" (dshLib.shippedPreset pkgs "standard") != null)

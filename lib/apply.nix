@@ -456,6 +456,16 @@ let
                 (id: { name = id; value = "${toString src}/presets/${id}"; })
                 src.passthru.dshPresets)
             else { };
+          # 黑名单过滤 + typo/残留 fail-loud:排除 id 必须在探测集内
+          # (拼错,或上游已删该 preset 而排除表未清 → 配置腐烂,报错清理)
+          filterExcluded = name: p: scanned:
+            let
+              excluded = p.excludedPresets or [ ];
+              unknown = filter (id: !scanned ? ${id}) excluded;
+            in
+            if unknown != [ ] then
+              throw "programs.dsh.plugins.${name}: excludedPresets lists '${builtins.head unknown}' but the plugin ships no such preset (detected: ${concatStringsSep ", " (attrNames scanned)}) — typo, or stale after an upstream drop?"
+            else builtins.removeAttrs scanned excluded;
         in
         # tryEval:sourceOf 对未知插件 throw(与插件分发同语义),发现面
         # 不放大 —— 单个插件源解析失败不影响其余(该错误在分发路径已
@@ -466,7 +476,7 @@ let
             if !p.enable then acc
             else
               let r = builtins.tryEval (sourceOf name p); in
-              if r.success then acc // (scanSrc r.value) else acc)
+              if r.success then acc // (filterExcluded name p (scanSrc r.value)) else acc)
           { }
           (attrNames cfg.plugins);
     in
