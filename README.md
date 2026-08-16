@@ -305,6 +305,39 @@ row.config)+ `web` 行重述 `searchProvider` + 包源进所有 profile
 求值期断言:选择 id 须在声明表 ∪ {deepseek-official};能力禁 ×
 声明表非空 → throw。
 
+## 网页抓取(fetch 缝,rc.6 现状:空)
+
+`ctx.web` 是**一个缝两个操作**(dsh-web README:17 原话:"one seam …
+one provider-selection policy owner"):search/fetch 两套同构机制,
+共用选择器策略、错误码词汇(`WEB_PROVIDER_*`)与执行时分发 —— 差异
+只在生态现状。
+
+| | search 缝 | fetch 缝 |
+|---|---|---|
+| 注册表 | `searchProviders`(exa/zhipu/deepseek 在填) | `fetchProviders`(**rc.6 零注册者**) |
+| 接口 | `{id, available(), search({query, maxResults}) → {sources[]}}` | `{id, available(), fetch({url}) → {statusCode, body}}`(body 封闭 union `html`\|`text`) |
+| 选择器 | `searchProvider` / `DSH_WEB_SEARCH_PROVIDER` | `fetchProvider` / `DSH_WEB_FETCH_PROVIDER` |
+| 模型面工具 | `web_search`(tool-web) | `web_fetch`(tool-web,`fetch` 键,base 默认 **false**) |
+
+**fetch 缝为什么空:SSRF 责任推给 provider**(dsh-base patch 源码
+注释:"that provider defers SSRF protection and the model would
+choose the request target")。模型自选 URL + provider 在本机发请求 =
+经典 SSRF 面(127.0.0.1/169.254.169.254 云元数据/RFC1918/DNS
+rebinding/重定向跳内网);上游立场是 seam 不挡、谁注册谁防护,官方
+规划中的 `dsh-web-fetch-http`(README 生态表)未随 rc.6 发布,故
+`fetch: false` 保险丝。search 缝无此问题(query 是字符串非 URL,
+请求目标永远是 provider 自己的 API)。
+
+**远端 reader 型 fetch provider 无 SSRrf 面**(如 Zhipu web_reader
+包装):抓取发生在 provider 服务商的网络(bigmodel.cn),不是本机 ——
+经典目标(本机回环/内网/云元数据)从服务商网络不可达;本机唯一网络
+活动是到 MCP 端点的出站 HTTPS。上游"provider 自负 SSRF 责任"对这类
+provider 平凡满足(不从本地网络抓取,防护清单零条适用)。
+
+nixdsh 侧:fetch 缝暂无 typed 选项(无 provider 可选,管无可管);
+将来落地时照 webSearch/webSearchProviders 同款模式加
+`webFetch`/`webFetchProviders`(缝的对称性预留了这个扩展点)。
+
 **已知限制:Web Plugins 页的表单卡是上游硬编码,不随命名空间出现**
 (实测 rc.6,`dsh-client-ui-settings-plugins/client.js`)。Plugins 页
 每张卡在前端代码里写死:agent-loop / shell / **web-search-deepseek**
