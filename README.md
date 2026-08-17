@@ -525,6 +525,16 @@ per-face 是干净成立的(later-wins 行 patch,无需重放/fork)。
 `approval: never`(与上游 env 公式同构)—— 三行不一致会让组合层
 推断出 "custom" 而炸(dsh-permission-presets :116)。
 
+**read-only 的表接管**:`read-only` 是合法 sandbox mode
+(SANDBOX_MODES)但**不是**上游 preset——`permission-presets` 表默认
+只有 `workspace-write`/`danger-full-access` 两条,服务构造即
+`resolve(defaultPreset)`,未知即 throw。该表 `presets` 键是 z.dict
+**整表替换**语义(default 仅在缺省时生效)→ `read-only` 模式下
+`permission` 行 config 携带整表(上游两条逐字镜像 + `read-only`
+本地条目,approval=ask)。负载键(sandbox/approval)镜像上游常量;
+name/description 漂移仅影响 UI 文案。副作用为正:运行期手切
+read-only 的会话也能被 derive 命中,显示为命名 preset 而非 custom。
+
 **caveat**:UI 里"选择新会话的默认权限模式"写的是 settings 命名空间的
 运行时用户层,恒胜组合层 —— 手选过一次后本选项被遮蔽(UI 改回即恢复)。
 这是与 defaultPreset 协调同款的"settings 用户层在上"约束,方向相反:

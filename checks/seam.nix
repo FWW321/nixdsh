@@ -489,6 +489,42 @@ in
       touch $out
     '';
 
+  # permission read-only boot 级端到端:真 web 树 + 全局 read-only 三行
+  # (表接管进 permission 行 config)→ dump-config 不炸构造期 resolve
+  # (修前:unknown preset "read-only" 于服务构造处 throw)
+  dsh-permission-boot =
+    let
+      cfg' = {
+        permissionMode = "read-only";
+        plugins."web-app" = {
+          enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
+          profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+        };
+      };
+      applied' = applyWith cfg';
+      inc = applied'.perProfile.web;
+      bundle = dshLib.buildProfile {
+        inherit pkgs;
+        profile = dshLib.mkProfile {
+          name = "web";
+          plugins = [ "@deepseek-ai/dsh-base" "@deepseek-ai/dsh-web-app" ] ++ inc.extraPlugins;
+          userPatchesFile = null;
+          userPatches = inc.extraPatches;
+        };
+      };
+    in
+    pkgs.runCommand "dsh-permission-boot-check" { } ''
+      ${fx.materialize "web" bundle}
+      ${pkgs.dsh}/bin/dsh --profile web --dump-config > "$TMPDIR/dump.log" 2>&1 \
+        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      ! grep -q 'unknown preset' "$TMPDIR/dump.log" \
+        || { cat "$TMPDIR/dump.log" >&2; echo "permission table takeover failed" >&2; exit 1; }
+      # 表接管后 read-only 是命名 preset:defaultPreset 解析成功且入 dump
+      grep -q 'read-only' "$TMPDIR/dump.log" \
+        || { cat "$TMPDIR/dump.log" >&2; echo "read-only missing from dump" >&2; exit 1; }
+      touch $out
+    '';
+
   # 权限模式:三行同步渲染 + per-face 胜全局(later-wins)+ 负例
   dsh-permission-mode =
     let
@@ -527,12 +563,23 @@ in
         "permission-mode: read-only approval policy must be ask")
       (assert' ((lastOf tuiRows "permission").config.defaultPreset == "read-only")
         "permission-mode: permission.defaultPreset must stay in sync")
+      # read-only 非上游 preset → 行 config 须整表接管(上游两条镜像 +
+      # read-only 条目);负载键 sandbox/approval 与上游常量一致
+      (let perm = (lastOf tuiRows "permission").config; in
+        assert' (perm ? presets
+          && builtins.attrNames perm.presets == [ "danger-full-access" "read-only" "workspace-write" ]
+          && perm.presets.read-only.sandbox == "read-only"
+          && perm.presets.read-only.approval == "ask"
+          && perm.presets."workspace-write".approval == "ask"
+          && perm.presets."danger-full-access".approval == "never")
+          "permission-mode: read-only needs full-table takeover in the permission row")
       # web 树:回落全局 workspace-write
       (assert' ((lastOf webRows "sandbox-policy").config.mode == "workspace-write")
         "permission-mode: unset face must fall back to the global value")
       (assert' ((lastOf webRows "approval").config.policy == "ask"
-        && (lastOf webRows "permission").config.defaultPreset == "workspace-write")
-        "permission-mode: web tree rows must stay in sync")
+          && (lastOf webRows "permission").config.defaultPreset == "workspace-write"
+          && !((lastOf webRows "permission").config ? presets))
+        "permission-mode: web tree rows must stay in sync (no table takeover for real presets)")
       # danger-full-access → approval never(与上游 env 公式同构)
       (let danger = mk {
               permissionMode = "danger-full-access";

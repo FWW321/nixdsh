@@ -293,13 +293,45 @@ let
             (cfg.plugins or { }));
         in
         listToAttrs (map (e: nameValuePair e.tree e.value) fromPlugins);
+      # read-only 是合法 sandbox mode(dsh-sandbox-policy SANDBOX_MODES)
+      # 但上游 preset 表只有 workspace-write/danger-full-access 两条,服务
+      # 构造即 resolve(defaultPreset),未知即 throw。presets 是 z.dict
+      # 整表替换语义(default 仅在键缺省时生效)→ 注册 read-only 必须整表
+      # 重述:上游两条逐字镜像(sandbox/approval 是负载键,镜像上游常量;
+      # name/description 漂移仅影响 UI 文案)+ read-only 本地新条目。
+      # 副作用(正):表变三键后,运行期手切 read-only 的会话也能被 derive
+      # 命中显示为命名 preset 而非 custom。
+      permissionPresetsWithReadOnly = {
+        "workspace-write" = {
+          sandbox = "workspace-write";
+          approval = "ask";
+          name = "workspace-write";
+          description = "Write inside the workspace and permitted temporary directories; wider retries require approval.";
+        };
+        "danger-full-access" = {
+          sandbox = "danger-full-access";
+          approval = "never";
+          name = "danger-full-access";
+          description = "Full file access without approval prompts.";
+        };
+        "read-only" = {
+          sandbox = "read-only";
+          approval = "ask";
+          name = "read-only";
+          description = "Read-only file access; modifications require switching presets.";
+        };
+      };
       permissionRowsFor = tree:
         let mode = facePermissionRows.${tree} or globalPermissionMode; in
         if mode == null then [ ]
         else [
           { id = "sandbox-policy"; config.mode = mode; }
           { id = "approval"; config.policy = if mode == "danger-full-access" then "never" else "ask"; }
-          { id = "permission"; config.defaultPreset = mode; }
+          {
+            id = "permission";
+            config = { defaultPreset = mode; }
+              // (if mode == "read-only" then { presets = permissionPresetsWithReadOnly; } else { });
+          }
         ];
       targetsFor = p:
         if p.profiles == [ ] then allProfileNames
