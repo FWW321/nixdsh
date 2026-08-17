@@ -662,7 +662,6 @@ webFetch = "zhipu";      # fetch:true 重放进全部 preset(含 shipped —— 
 $ dsh-presets
 code      replayed   dsh
 cordis    replayed   dsh
-fww       declared   presets.fww ← shipped:standard
 liangshen discovered plugins.dsh-tui
 minimal   replayed   dsh
 standard  replayed   dsh
