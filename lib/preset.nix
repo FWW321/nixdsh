@@ -1,12 +1,14 @@
 # preset 物化管线(build 期改写 + 剥所有权 marker):
 #   buildPreset { pkgs; source; rows } → derivation
 #
-# ⚠ RETIRING 注记:本层是对上游架构缺陷的声明式补丁,不是长期机制 ——
-# 上游 preset 是终态组合("a preset IS a composition"),能力行(tool-web
-# 的 fetch 保险丝等)散在每个 preset 文件里,宿主层 patch 被 preset 层
-# 遮蔽(resolution: agent → preset → global)。当上游把能力保险丝接进
-# settings 热缝或宿主 web 行 config(已列上游 issue 批次),本层整体
-# 退役,preset 物化回退为纯 cp。
+# ⚠ 永久机制注记(原 retiring 前提已失效 —— 上游不收 issue/PR,
+# 无修缝可等):本层是 preset 层穿透的长期机制,不是过渡补丁 ——
+# 上游 preset 是终态组合("a preset IS a composition"),能力行
+# (tool-web 的 fetch 保险丝等)散在每个 preset 文件里,宿主层
+# patch 被 preset 层遮蔽(resolution: agent → preset → global)。
+# 闭门约束下的对称最优:fork 接管(换名)+ 行重放;bump 自动跟新
+# source 内容(patch 源码做不到)。若上游将来开放并修缝,本层
+# 可整体退役,物化回退为纯 cp —— 注记保留此可能,不依赖它。
 #
 # 机制(与 profile 的 base+userPatches 同构):
 #   - rows = 能力选项渲染的行组(applyPlugins 单一事实源;当前 =

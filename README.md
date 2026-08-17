@@ -455,7 +455,8 @@ provider 加过审计事件(照官方 recordRequest 模式),实测毒化 —— 
   字节保留)
 - 服务读坏日志会 boot 崩溃循环(dsh-web 起不来,3080 拒连);日志
   修好后 systemd 自动拉起,无需干预
-- 上游 issue 素材(第 4 条):会话事件注册面或公开 ignorable 写入口
+- 上游闭门,无 issue 可提;若未来政策变化,素材:会话事件注册面或
+  公开 ignorable 写入口
 
 ## 入口
 
@@ -597,11 +598,14 @@ profile:未变不动,孤儿自扫)。声明名 Nix 拥有 —— 物化覆盖 TU
 managed marker)。与 shipped 预设撞 id 的自建预设会被 root 优先级
 遮蔽 —— 改名。
 
-### 能力行重放(preset 层穿透,含 retiring 注记)
+### 能力行重放(preset 层穿透;上游闭门,本地永久机制)
 
-⚠ **本小节机制是对上游缺陷的声明式补丁,上游修缝后整体退役**
-(条件:能力保险丝进 settings 热缝或宿主 `web` 行 config —— 已列
-上游 issue 批次)。退役 = 物化回退纯拷贝,行为见 lib/preset.nix 注记。
+⚠ **本小节机制是本地永久机制,不是过渡补丁**。原 retiring 前提
+(上游把能力保险丝接进 settings 热缝或宿主行 config)已失效:
+上游不收 issue/PR,无修缝可等。重放层与 fork 接管(换名,如
+fww ← shipped:standard)即本地终局 —— 闭门约束下已是对称最优
+(patch 源码会杀死 bump 自动跟新并制造静默偏离,唯一收益"名字
+叫 standard"不值;会话内手选逃逸是上游架构投影,patch 也无解)。
 
 背景(实测 rc.6):能力行组的宿主层 patch 对 web/tui 会话**无效**
 ——dsh-web-app bundle 把 tool-web 等模型面工具整行禁用("The Web
@@ -697,9 +701,10 @@ pending switch;物化在而声明无 = orphan/手写。排障入口
 结论:preset id 是上游留下的唯一完备分化轴。nixdsh 语义定档:
 全局均一(完备、零新概念)为用户面;`presets.<id>.patches`(行 id 寻址,
 later-wins)为将来按需的逃生口;**face 轴糖物理不可能完备,永不建**
-(会话内手动切 preset 会逃出配置)。真正的通用终局在上游修缝
-(保险丝进 settings/宿主行)—— 通道 2 的 clobber 证据说明上游自己也把
-capability 分化定位在 settings 面,这正是 retiring issue 的方向。
+(会话内手动切 preset 会逃出配置)。上游闭门(不收 issue/PR),本地
+终局 = fork 接管 + 行重放,无上游修缝可等 —— 通道 2 的 clobber 证据
+(上游把 capability 分化定位在 settings 面)留作上游自身演化方向的
+参考,不构成 nixdsh 的依赖。
 
 残余边界(架构性质,非方案缺陷):会话内手动选非 default 的 shipped
 preset(standard/cordis)拿到未改写版 —— "a preset IS a

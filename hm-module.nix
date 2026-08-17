@@ -69,7 +69,7 @@ let
   # 解析链 —— 零 source 插件也发现)+ 显式 presets.<name> 声明(胜)。
   # 校验在 lib.validatePresets(eval 期 fail-loud);stamp 语义同 profile
   # (声明名 Nix 拥有,物化覆盖创造模式迭代版 —— 声明即接管)。
-  # ⚠ 能力行被 preset 层遮蔽的根因与 retiring 条件见 lib/preset.nix 注记
+  # ⚠ 能力行被 preset 层遮蔽的根因与永久机制注记见 lib/preset.nix
   presetArtifacts = lib.mapAttrs
     (name: src: dshLib.buildPreset {
       inherit pkgs;
