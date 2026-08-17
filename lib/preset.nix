@@ -1,14 +1,19 @@
-# preset 物化管线(build 期改写 + 剥所有权 marker):
-#   buildPreset { pkgs; source; rows } → derivation
+# preset 物化管线(build 期改写)与 roster 接管:
+#   buildPreset { pkgs; source; rows } → derivation(重放引擎)
+#   buildPresetFarm { pkgs; declared; discovered; rows } → 单一 store 根
 #
-# ⚠ 永久机制注记(原 retiring 前提已失效 —— 上游不收 issue/PR,
-# 无修缝可等):本层是 preset 层穿透的长期机制,不是过渡补丁 ——
-# 上游 preset 是终态组合("a preset IS a composition"),能力行
-# (tool-web 的 fetch 保险丝等)散在每个 preset 文件里,宿主层
-# patch 被 preset 层遮蔽(resolution: agent → preset → global)。
-# 闭门约束下的对称最优:fork 接管(换名)+ 行重放;bump 自动跟新
-# source 内容(patch 源码做不到)。若上游将来开放并修缝,本层
-# 可整体退役,物化回退为纯 cp —— 注记保留此可能,不依赖它。
+# ⚠ 机制注记(上游闭门,本地永久):上游 preset 是终态组合("a preset IS
+# a composition"),能力行(tool-web 的 fetch 保险丝等)散在每个 preset
+# 文件里,宿主层 patch 被 preset 层遮蔽(resolution: agent → preset →
+# global)。本地终局 = **roster 接管**:禁 base 的 agent-presets 行、以
+# 异 id 重插同包实例带自定义 roots(profile-boot 的 clobber 只打 id
+# "agent-presets",异 id 不受击 —— 实证 profile-boot-*.js:180),roster
+# = [farm(system), user]。farm 内**全部 preset 均为重放产物**(含
+# shipped id —— 手选逃逸随之关闭);includeUserRoot 缺省保留,手写
+# preset 照旧热发现。trust: system → tui 视同 shipped,marker 舞与
+# 物化 activation 整体退役(store 只读,零运行时状态)。
+# 若上游将来开放并修缝(mountPreset overlay),本层可退役 —— 注记
+# 保留此可能,不依赖它。
 #
 # 机制(与 profile 的 base+userPatches 同构):
 #   - rows = 能力选项渲染的行组(applyPlugins 单一事实源;当前 =
@@ -37,9 +42,11 @@ let
     hasPrefix
     length
     mapAttrs
+    mapAttrsToList
     optionalString
     ;
 in
+rec
 {
   # ── shipped preset 助手(消 config 侧布局硬编码)────────────────────
   # pnpm deploy 布局知识收在 nixdsh 一处;上游布局变化由
@@ -58,12 +65,11 @@ in
       (attrNames (builtins.readDir root));
 
   # ── preset 出处总账(dsh-presets 命令的数据源)────────────────────
-  # 三态:builtin(runtime 自带,只读参考,不物化)/ declared(显式
-  # presets.<name> 接管物化)/ discovered(插件源自动发现接管)。
-  # fork 检测:declared source 路径落在 shipped root 内 → forkOf 标注
-  # (shipped:standard 换名接管,first-root-wins 遮蔽先例)。
-  # excludedPresets 不进账(排除了就是没有);要看出处再排错的入口是
-  # 命令本身列插件面 —— 排除表语义已由 excludedPresets typo throw 兜住
+  # 三态(farm 内实然;farm 之外不存在其他来源 —— user 根是用户的,不进账):
+  #   replayed  = shipped id 的重放接管(随 dsh 升级,能力行已重放)
+  #   declared  = 显式 presets.<name> 接管(source 落 shipped root 内 →
+  #               forkOf 标注换名 fork)
+  #   discovered= 插件源自动发现接管
   presetOrigins =
     { pkgs, declared ? { }, discoveredOrigins ? { } }:
     let
@@ -76,59 +82,114 @@ in
       } // (let s = toString src; in
         if hasPrefix root s then { forkOf = baseNameOf s; } else { });
     in
-    (mapAttrs (_: id: { mode = "discovered"; origin = "plugins.${id}"; }) discoveredOrigins)
-    // (mapAttrs declaredRow declared)
-    // (genAttrs shippedIds (_: { mode = "builtin"; origin = "dsh"; }));
+    (genAttrs shippedIds (_: { mode = "replayed"; origin = "dsh"; }))
+    // (mapAttrs (_: id: { mode = "discovered"; origin = "plugins.${id}"; }) discoveredOrigins)
+    // (mapAttrs declaredRow declared);
+
+  # roster 根:全部 preset 的重放产物单一 store 目录。shipped id 全量
+  # 重放(能力行进 shipped —— 手选逃逸关闭);declared/discovered 覆盖
+  # 同名(声明即接管先例)。rows 里的 insert 行被 buildPreset 自然滤掉
+  # (无顶层 config 键),与旧物化语义一致
+  buildPresetFarm =
+    { pkgs, declared ? { }, discovered ? { }, rows ? [ ] }:
+    let
+      root = shippedRoot pkgs;
+      shippedIds = shippedPresetNames pkgs;
+      all =
+        (genAttrs shippedIds (id: "${root}/${id}"))
+        // discovered
+        // declared;
+    in
+    pkgs.runCommand "dsh-preset-farm"
+      {
+        meta.description = "dsh preset roster root (replayed; ${toString (length (attrNames all))} presets, ${toString (length rows)} row groups)";
+      }
+      (concatStringsSep "\n"
+        (mapAttrsToList
+          (name: src: ''
+            mkdir -p "$out"
+            cp -a ${toString (buildPreset { inherit pkgs rows; source = src; })} "$out/${name}"
+          '')
+          all));
 
   # dsh-presets 命令(hm-module home.packages 挂载;checks 直测):
-  # 构建期 JSON 快照 + 只读渲染,--live 对比物化区(声明在而未物化 =
-  # pending switch;物化在而声明无 = orphan/手写)。出处文件不进
-  # ~/.dsh/.agent-presets(tui 扫描根,外来文件风险),只在命令 store 路径
+  # 构建期 JSON 快照(总账 + farm 路径)只读渲染。
+  #   默认      总账表(farm 内全部 preset:replayed/declared/discovered)
+  #   --live    对比各 face 树的 roster 行 roots 是否指向当前 farm
+  #             (旧 farm/无行 = pending switch;无行的树静默跳过)
+  #   --tree F  单树诊断:default/roots/同步态
   mkPresetOriginsCmd =
-    { pkgs, origins, dshHome }:
+    { pkgs, origins, farm, dshHome }:
     let
-      json = pkgs.writeText "dsh-preset-origins.json" (builtins.toJSON origins);
+      json = pkgs.writeText "dsh-preset-origins.json"
+        (builtins.toJSON { inherit farm; presets = origins; });
     in
     pkgs.writeShellApplication {
       name = "dsh-presets";
       runtimeInputs = with pkgs; [ jq util-linux ];
       text = ''
         origins=${json}
-        dsh_home=${dshHome}
+        dsh_home="''${DSH_HOME:-${dshHome}}"
+
+        tree_roster() {
+            # 输出 <default> <roots-path>;无行/不可解析 → 空
+            jq -r '
+              [.[] | select(.insert?) | .insert[]
+               | select(.id == "agent-presets-nix")] | .[0]
+              | if . == null then empty else
+                  "\(.config.default // "-")\t\(.config.roots[0].path // "-")"
+                end
+            ' "$1" 2>/dev/null || true
+        }
 
         if [ "$#" -eq 0 ]; then
-            jq -r 'to_entries | sort_by(.value.mode, .key) | .[] |
+            jq -r '.presets | to_entries | sort_by(.value.mode, .key) | .[] |
                 "\(.key)\t\(.value.mode)\t\(.value.origin)\(if .value.forkOf then " ← shipped:\(.value.forkOf)" else "" end)"
             ' "$origins" | column -t -s "$(printf '\t')"
             echo
-            echo "(builtin = runtime 自带只读参考;declared/discovered = Nix 接管物化;--live 对比 $dsh_home/.agent-presets)"
+            echo "(roster root: $(jq -r .farm "$origins"); --live 对比各树; --tree <face> 单树诊断)"
             exit 0
         fi
 
         case "$1" in
             --live)
-                mapfile -t ids < <(jq -r 'to_entries | map(select(.value.mode != "builtin")) | .[].key' "$origins")
-                for id in "''${ids[@]}"; do
-                    if [ -d "$dsh_home/.agent-presets/$id" ]; then
-                        echo "✓ $id: in sync"
+                farm_now="$(jq -r .farm "$origins")"
+                for patch in "$dsh_home"/profiles/*/cordis.patch.yml; do
+                    [ -f "$patch" ] || continue
+                    tree="$(basename "$(dirname "$patch")")"
+                    row="$(tree_roster "$patch")"
+                    [ -n "$row" ] || continue
+                    roots="$(printf '%s' "$row" | cut -f2)"
+                    if [ "$roots" = "$farm_now" ]; then
+                        echo "✓ $tree: roster in sync"
                     else
-                        echo "✗ $id: declared but not materialized (pending switch?)"
+                        echo "✗ $tree: pending switch (roots=$roots, current=$farm_now)"
                     fi
                 done
-                for dir in "$dsh_home"/.agent-presets/*; do
-                    [ -e "$dir" ] || continue
-                    name="$(basename "$dir")"
-                    case " ''${ids[*]} " in
-                        *" $name "*) ;;
-                        *) echo "? $name: in ~/.dsh but not in current generation (orphan or hand-written)" ;;
-                    esac
-                done
+                ;;
+            --tree)
+                if [ $# -lt 2 ]; then echo "usage: dsh-presets --tree <face>" >&2; exit 1; fi
+                patch="$dsh_home/profiles/$2/cordis.patch.yml"
+                if [ ! -f "$patch" ]; then
+                    echo "no such tree: $2 (under $dsh_home/profiles/)" >&2; exit 1
+                fi
+                row="$(tree_roster "$patch")"
+                if [ -z "$row" ]; then
+                    echo "$2: no roster row (hand-written or headless tree)"
+                    exit 0
+                fi
+                farm_now="$(jq -r .farm "$origins")"
+                roots="$(printf '%s' "$row" | cut -f2)"
+                echo "tree:    $2"
+                echo "default: $(printf '%s' "$row" | cut -f1)"
+                echo "roots:   $roots"
+                [ "$roots" = "$farm_now" ] && echo "sync:    ✓ in sync" || echo "sync:    ✗ pending switch"
                 ;;
             -h|--help)
-                echo "usage: dsh-presets [--live]"
+                echo "usage: dsh-presets [--live | --tree <face>]"
                 ;;
             *)
-                echo "unknown flag: $1 (try --live)" >&2
+                echo "unknown flag: $1 (try --live / --tree <face>)" >&2
                 exit 1
                 ;;
         esac

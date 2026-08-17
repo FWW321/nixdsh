@@ -22,10 +22,13 @@ let
     inherit lib;
     inherit (secret) secretEnvName;
   };
+  preset = import ./preset.nix { inherit lib; };
   apply = import ./apply.nix {
     inherit lib;
     inherit (secret) renderSecretAttrs secretEnvName;
     inherit (inbox) inBoxFaces;
+    inherit (settings) validatePresets;
+    inherit (preset) buildPresetFarm;
   };
   wrapper = import ./wrapper.nix {
     inherit lib;
@@ -39,7 +42,6 @@ let
     inherit (apply) applyPlugins;
     inherit (inbox) buildProfile mkProfile;
   };
-  preset = import ./preset.nix { inherit lib; };
 in
 {
   # 公共 API(与拆分前 lib.nix 的导出面一致)
@@ -71,6 +73,7 @@ in
     ;
   inherit (preset)
     buildPreset
+    buildPresetFarm
     mkPresetOriginsCmd
     presetOrigins
     shippedPreset

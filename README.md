@@ -494,21 +494,19 @@ plugins."web-dev" = {
 `passthru.dshFace`)。路径源无元数据不可检;`userPatchesFile` 是全权
 委托同样检测不到 —— 这两处是文档纪律:交互 bundle 一律走插件通道。
 
-### 默认 preset(per-face + 全局兜底)
+### 默认 preset(per-face + 全局兜底;随 roster 接管下发)
 
 ```nix
 plugins.dsh-tui.defaultPreset = "liangshen";  # tui 树默认(改名自动跟随)
-programs.dsh.defaultPreset = "fww";           # 其余树兜底
+programs.dsh.defaultPreset = "fww";           # 其余树兜底(再缺省 standard)
 ```
 
-消费者是树上 `agent-presets` roster 行的 `default` 键(不是插件 ——
-插件只播种 preset)。**settings 协调**(核心约束):行 config 只是
-settings 的 base,settings 用户层恒胜 —— 任一 per-face 值生效时全局
-自动不进 settings、下沉为各树行 patch 的兜底值,免遮蔽;只设全局时
-走 settings 热缝(免重启)。负例全 fail-loud:非 face 插件设值 /
-freeform `settings."agent-presets"` 与 typed 同设。preset id 存在性
-不校验(手写 preset 是运行时状态,eval 期不可见;roster 自有
-UnknownPresetError)。
+值直接进各 face 树 `agent-presets-nix` 行的 `config.default`(见下节
+roster 接管)—— **无 settings 面**:settings 用户层恒胜组合层行,
+故 nixdsh 从不写 `settings."agent-presets"`(freeform 与 typed 同设 →
+throw;仅 freeform = 用户自管逃生口,文档化遮蔽语义)。负例全
+fail-loud:非 face 插件设值 / freeform 冲突。preset id 存在性不校验
+(手写 preset 是运行时状态;roster 自有 UnknownPresetError)。
 
 ### 权限模式(新会话默认;per-face 物理成立)
 
@@ -584,28 +582,23 @@ web 服务与 `dsh tui` 并行运行是预期用法:两进程、两棵树、一�
 programs.dsh.presets.liangshen.source = ./presets/liangshen;
 ```
 
-activation 物化到 `$DSH_HOME/.agent-presets/<name>`(stamp 语义同
-profile:未变不动,孤儿自扫)。声明名 Nix 拥有 —— 物化覆盖 TUI 创造
-模式的同名迭代版;**import 工作流**:创造模式做原型 → `cp -r
-~/.config/deepseek-harness/.agent-presets/<名>` 进 config 仓库 → 声明
-→ 之后迭代走仓库。缺 `agent.cordis.yml` 求值期 fail-loud。
+声明的 preset 进 farm(roster 根,见下节)—— **零 activation 物化**
+(store 只读)。**import 工作流**:TUI 创造模式做原型(`~/.config/
+deepseek-harness/.agent-presets/<名>`,user 根热发现)→ `cp -r` 进
+config 仓库 → 声明 → 之后迭代走仓库。缺 `agent.cordis.yml` 求值期
+fail-loud。
 
 **勿导入插件 shipped 的预设**(踩过:liangshen 是 dsh-tui 自带的)。
 辨别:副本目录里有 `.dsh-tui-managed.json`(owner = 插件名)即是插件
-管理的同步物 —— 插件更新经此通道自动跟进,导入 = 冻结当前版本,
-遮蔽更新(root 优先级 first-root-wins,两 root 同 id)。shipped 预设
-无需任何声明,插件装了就在;只导入**你自己创造/手写**的预设(无
-managed marker)。与 shipped 预设撞 id 的自建预设会被 root 优先级
-遮蔽 —— 改名。
+管理的同步物 —— 插件更新经此通道自动跟进,导入 = 冻结当前版本。
+shipped 预设无需任何声明(进 farm);只导入**你自己创造/手写**的
+预设(无 managed marker)。
 
-### 能力行重放(preset 层穿透;上游闭门,本地永久机制)
+### roster 接管与能力行重放(preset 层穿透;上游闭门,本地永久机制)
 
-⚠ **本小节机制是本地永久机制,不是过渡补丁**。原 retiring 前提
-(上游把能力保险丝接进 settings 热缝或宿主行 config)已失效:
-上游不收 issue/PR,无修缝可等。重放层与 fork 接管(换名,如
-fww ← shipped:standard)即本地终局 —— 闭门约束下已是对称最优
-(patch 源码会杀死 bump 自动跟新并制造静默偏离,唯一收益"名字
-叫 standard"不值;会话内手选逃逸是上游架构投影,patch 也无解)。
+⚠ **本小节机制是本地永久机制(roster 接管),不是过渡补丁**。上游
+不收 issue/PR,无修缝可等;若将来开放修缝(mountPreset overlay),
+可退役 —— 注记保留可能,不依赖。
 
 背景(实测 rc.6):能力行组的宿主层 patch 对 web/tui 会话**无效**
 ——dsh-web-app bundle 把 tool-web 等模型面工具整行禁用("The Web
@@ -616,68 +609,75 @@ preset(standard:250 / liangshen:388 写死 `fetch: false`),行解析
 本就是 `search: true, fetch: true`(dsh-tool-web index.js:747)——
 保险丝是 preset 显式关的,不是插件默认。
 
-机制:`presets.<name>.source` 的物化升级为 derivation
-(`lib/preset.nix buildPreset`)——build 期把 applyPlugins 渲染的
-能力行组(wfRows / wsProviderRows / wsSelectorRow,单一事实源)
-yq 按 id 改写进 `agent.cordis.yml`,并剥 `.dsh-tui-managed.json`
-(tui 的 ensurePackagedPresets 视无 marker 目录为 conflict 永不
-staged 替换 —— 所有权归声明方)。
+**机制:roster 接管(两行舞 + farm)**。profile-boot 对
+`agent-presets` 行的 config 无条件 clobber(roots 钉 shipped,
+:180 `rows.has("agent-presets")` 守卫)—— 但 **clobber 只打 id**:
+nixdsh 在每棵 face 树的 userPatches 里 ① 禁 base 的
+`agent-presets` 行(随之行失效)② 异 id `agent-presets-nix` 重插
+同包实例,`config = { default = <typed 值>; roots = [ { path =
+<farm>; trust = "system"; } ]; }`。插件的 roots Config 本就是设计面
+(:808),服务名是类常量与 entry id 无关(:848),同包多实例异 id
+是既有实践(mcp-client ×7)。实证:web 树干净 boot,preset 菜单
+roster 完全来自 farm(shipped 集被挤出)。
+
+**farm**(`lib/preset.nix buildPresetFarm`)= 单一 store 只读根,
+全部 preset 的**重放产物**:shipped 全量(能力行 yq 按 id 改写进
+`agent.cordis.yml` —— **手选 shipped id 拿到的也是重写版,逃逸
+关闭**;行不在则无操作,minimal 无 tool-web 是身份语义)+ discovered
++ declared(同名胜,声明即接管)。roster = `[farm(system), user]`,
+includeUserRoot 缺省保留 → 手写 preset 照旧热发现;trust: system →
+tui 视同 shipped(ensurePackagedPresets 永不碰,**marker 剥离舞与
+activation 物化整体退役**,旧物化区带 stamp 目录一次性清理)。
 
 - **零边际**:行组来自能力选项(webFetch/webSearch/将来任意),
-  自动穿透所有声明的 preset;配置面无任何 per-preset 改写行
+  单一事实源自动穿透全部 preset;配置面无任何 per-preset 改写行
 - **preset 自动发现**:enabled 插件源携带的 preset 自动接管(registry
   derivation 走 `passthru.dshPresets`(update.py 收录时探测 `presets/*/
   agent.cordis.yml`),flake path 源直扫目录)—— `plugins.dsh-tui.enable`
-  是唯一事实,preset 跟随插件生命周期(disable → 孤儿清理移除);用户
-  显式 `presets.<name>` 声明与发现撞名 → 显式胜;黑名单
-  `plugins.<name>.excludedPresets = [ "id" ]` 不接管特定 preset
-  (走上游播种通道,如 tui 的 ensurePackagedPresets 原件),排除 id
-  不在插件探测集(拼错/上游已删)→ eval throw;全禁
-  `plugins.<name>.presets = false`(与 face = false 的"压制自动通道"
-  同构,与 excludedPresets 同设 → throw)
-- **删除自动清理**:行增/删/改 → 产物 store 路径变 → stamp 不匹配
-  → 重物化;删整个声明 → 既有孤儿清理兜底
-- **行不在 preset 里 → 无操作**(minimal 无 tool-web 行是身份语义,
-  不 insert);disabled/insert 形态行不重放(全局树语义)
-- **上游跟随**:flake bump → source 包变 → 重物化重放,与 profile
-  的 base+userPatches 完全同构
+  是唯一事实,preset 跟随插件生命周期;用户显式 `presets.<name>`
+  声明与发现撞名 → 显式胜;黑名单 `plugins.<name>.excludedPresets`
+  不接管特定 preset,排除 id 不在插件探测集 → eval throw;全禁
+  `plugins.<name>.presets = false`
+- **上游跟随**:flake bump → source 包变 → farm 重建,与 profile
+  的 base+userPatches 完全同构;disabled/insert 形态行不重放(全局
+  树语义)
+- **耦合注记**:两行舞对 base 行 id `"agent-presets"` 硬耦合 ——
+  上游改名则 disable 行 warn-skip + 双服务共存炸(loud,非静默)
 
 用法(插件托管 preset 零声明;shipped fork 用助手消布局硬编码):
 
 ```nix
-# liangshen 零声明:dsh-tui enabled → preset 自动发现接管
+# liangshen 零声明:dsh-tui enabled → preset 自动发现接管(进 farm)
 presets.fww.source = lib.mkDefault (nixdsh.lib.shippedPreset pkgs "standard"); # 换名
-settings."agent-presets".default = "fww";
-webFetch = "zhipu";   # 自动重放 fetch:true 进所有 preset(发现 + 声明)
+defaultPreset = "fww";   # 进各树 agent-presets-nix 行(不再走 settings)
+webFetch = "zhipu";      # fetch:true 重放进全部 preset(含 shipped —— 逃逸已关)
 ```
 
-(settings 对 preset 名册只有 `{default}` 一键 —— dsh-agent-presets
-:796 `AgentPresetSettingsSchema = z.object({ default: z.string() })`,
-能力配置不可能经 settings 穿透 preset 面,已实证,重放层不可省。)
+### dsh-presets 命令(出处总账 + 树诊断)
 
-### dsh-presets 命令(出处总账)
-
-`dsh-presets` 列出全部 preset 及其归属与接管方式(构建期 JSON 快照,
-命令只读、零 eval):
+`dsh-presets` 列出全部 preset 及其归属(构建期 JSON 快照,命令只读、
+零 eval;farm 路径随快照下发):
 
 ```
 $ dsh-presets
-code      builtin     dsh
-cordis    builtin     dsh
-fww       declared    presets.fww ← shipped:standard
-liangshen discovered  plugins.dsh-tui
-minimal   builtin     dsh
-standard  builtin     dsh
+code      replayed   dsh
+cordis    replayed   dsh
+fww       declared   presets.fww ← shipped:standard
+liangshen discovered plugins.dsh-tui
+minimal   replayed   dsh
+standard  replayed   dsh
 ```
 
-- **builtin**:runtime 自带只读参考(dsh 升级集合自动跟随),不物化
+- **replayed**:shipped id 的重放接管(随 dsh 升级,能力行已重放)
 - **declared**:`presets.<name>` 显式接管;source 落在 shipped root 内
   → 标 `← shipped:<名>`(换名 fork)
 - **discovered**:插件源自动发现接管,`plugins.<插件名>` 即归属
 
-`--live` 对比物化区 `~/.dsh/.agent-presets/`:声明在而未物化 =
-pending switch;物化在而声明无 = orphan/手写。排障入口
-(未 switch 就找不到 preset / tui conflict 语义确认)。
+`--live` 比对各 face 树的 roster 行 `roots` 是否指向当前 farm:
+旧 farm / 无行 = ✗ pending switch;✓ in sync;无行的树(headless/
+手写)静默跳过。`--tree <face>` 单树诊断(default/roots/同步态 ——
+settings 遮蔽类排障的入口)。user 根目录不再清理(只有用户自己的
+手写物)。
 
 ### 分化轴调研结论(为何只有全局均一 + per-preset 逃生口)
 
@@ -706,9 +706,11 @@ later-wins)为将来按需的逃生口;**face 轴糖物理不可能完备,永不
 (上游把 capability 分化定位在 settings 面)留作上游自身演化方向的
 参考,不构成 nixdsh 的依赖。
 
-残余边界(架构性质,非方案缺陷):会话内手动选非 default 的 shipped
-preset(standard/cordis)拿到未改写版 —— "a preset IS a
-composition",preset 是终态组合非可深 merge 声明层;根治在上游。
+残余边界(已关闭):会话内手动选非 default 的 shipped preset 曾拿
+未改写版 —— roster 接管后 farm 全量重放,**shipped id 也是重写版,
+该逃逸不复存在**。剩余真边界仅两条:① settings 用户层手选 default
+恒胜组合层行(UI 手选后 nixdsh 的 defaultPreset 被遮蔽,UI 改回即
+恢复);② 手写 profile 树无 roster 语义(设计:非交互组合)。
 
 ### subagent 机制调研(master@47f9438 实证)
 

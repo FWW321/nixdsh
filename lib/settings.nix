@@ -16,15 +16,11 @@ let
   renderSettings =
     { settings, telemetry, providers ? { }, defaultModel ? null
     , webSearch ? null, webSearchProviders ? { }, llmDeepseek ? null
-    , webFetch ? null, webFetchProviders ? { }
-    , defaultPreset ? null, hasFaceDefaultPreset ? false }:
+    , webFetch ? null, webFetchProviders ? { } }:
     let
-      # 默认 preset 双层协调:行 config 是 settings 的 base,settings
-      # 用户层恒胜 —— 任一 per-face 值生效时全局不进 settings(否则
-      # 遮蔽全部行 patch),全局此时下沉为各树行兜底(applyPlugins 侧)
-      presetSettings =
-        if defaultPreset == null || hasFaceDefaultPreset then { }
-        else { "agent-presets" = (settings."agent-presets" or { }) // { default = defaultPreset; }; };
+      # (defaultPreset 不再有 settings 面:roster 接管后 default 恒在
+      # agent-presets-nix 行 config,settings 用户层恒胜行 —— freeform
+      # 撞 typed 在 applyPlugins 侧 throw)
       # 省略 null/空的字段;settings 逃生口最后并(未 typed 字段直通)。
       # `or` 缺省:renderSettings 可脱离 module system 直接调用(checks/测试)
       # models 行缺 name 时补 "<供应商显示名>/<id>":上游回落是裸 id
@@ -135,7 +131,6 @@ let
       }
     )
     // wsSettings
-    // presetSettings
     // wfSettings
     // (sectionIf "llm-deepseek" llmDeepseek);
 

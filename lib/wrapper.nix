@@ -107,8 +107,6 @@ let
         llmDeepseek = cfg.llmDeepseek or null;
         webFetch = cfg.webFetch or null;
         webFetchProviders = cfg.webFetchProviders or { };
-        defaultPreset = cfg.defaultPreset or null;
-        hasFaceDefaultPreset = _applied.hasFaceDefaultPreset;
       };
       _applied = applyPlugins { inherit cfg pkgs; };
       settingsJSON =

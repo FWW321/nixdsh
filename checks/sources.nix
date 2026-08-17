@@ -335,8 +335,8 @@ in
         "preset-replay-drift: shipped standard no longer takes the tool-web fetch rewrite (upstream row shape changed — update the replay row ids in lib/apply.nix)")
     ]) "touch $out");
 
-  # preset 出处总账:三态组装 + fork 标注 + excluded 不进账 + 命令渲染
-  # (命令本体真跑:默认表 + --live 三态)
+  # preset 出处总账:三态组装 + fork 标注 + 命令渲染(命令本体真跑:
+  # 默认表 + --live 树比对 + --tree 单树诊断)
   dsh-preset-origins =
     let
       mkOrigins = { declared ? { }, discoveredOrigins ? { } }:
@@ -348,15 +348,24 @@ in
         };
         discoveredOrigins = { liangshen = "dsh-tui"; };
       };
-      excludedCase = mkOrigins {
+      farm = dshLib.buildPresetFarm {
+        inherit pkgs;
         declared = { fww = dshLib.shippedPreset pkgs "standard"; };
-        discoveredOrigins = { };
+        discovered = { };
+        rows = [ ];
       };
       cmd = dshLib.mkPresetOriginsCmd {
-        inherit pkgs origins;
+        inherit pkgs origins farm;
         dshHome = "/tmp/dsh-origins-check";
       };
       assert' = c: m: pkgs.lib.assertMsg c m;
+      # --live/--tree 的树夹具:web 树 in-sync(roots=farm)、tui 树旧 farm
+      trees = pkgs.runCommand "origins-trees" { } ''
+        mkdir -p $out/profiles/web $out/profiles/tui $out/profiles/headless
+        printf '%s' '[{"insert":[{"id":"agent-presets-nix","name":"@deepseek-ai/dsh-agent-presets","config":{"default":"fww","roots":[{"path":"${farm}","trust":"system"}]}}]}]' > $out/profiles/web/cordis.patch.yml
+        printf '%s' '[{"insert":[{"id":"agent-presets-nix","name":"@deepseek-ai/dsh-agent-presets","config":{"default":"liangshen","roots":[{"path":"/nix/store/0000000000000000000000000000000-dsh-preset-farm-old","trust":"system"}]}}]}]' > $out/profiles/tui/cordis.patch.yml
+        printf '[]' > $out/profiles/headless/cordis.patch.yml
+      '';
     in
     pkgs.runCommand "dsh-preset-origins-check" { } (builtins.deepSeq ([
       (assert' (origins.fww.mode == "declared" && origins.fww.forkOf == "standard")
@@ -365,24 +374,30 @@ in
         "preset-origins: declared source outside shipped root must not carry forkOf")
       (assert' (origins.liangshen == { mode = "discovered"; origin = "plugins.dsh-tui"; })
         "preset-origins: discovered preset must map to its plugin")
-      (assert' (origins ? standard && origins.standard == { mode = "builtin"; origin = "dsh"; })
-        "preset-origins: shipped presets must be listed as builtin")
-      (assert' (builtins.length (builtins.attrNames excludedCase) > 0)
-        "preset-origins: builtin set must never be empty")
+      (assert' (origins ? standard && origins.standard == { mode = "replayed"; origin = "dsh"; })
+        "preset-origins: shipped presets must be listed as replayed")
     ]) ''
+      # farm 实然:shipped 全量在场(重放接管,无 passthrough 缺员)
+      for _id in ${toString (dshLib.shippedPresetNames pkgs)}; do
+        [ -f "${farm}/$_id/agent.cordis.yml" ] || { echo "farm missing shipped preset: $_id" >&2; exit 1; }
+      done
       # 默认表:三态齐 + fork 标注
       _tbl=$(${cmd}/bin/dsh-presets)
       echo "$_tbl" | grep -qE '^fww\s+declared\s+presets.fww' || { echo "$_tbl" >&2; exit 1; }
       echo "$_tbl" | grep -q 'shipped:standard' || { echo "forkOf annotation missing" >&2; exit 1; }
       echo "$_tbl" | grep -qE '^liangshen\s+discovered\s+plugins.dsh-tui' || { echo "$_tbl" >&2; exit 1; }
-      echo "$_tbl" | grep -qE '^standard\s+builtin\s+dsh$' || { echo "$_tbl" >&2; exit 1; }
-      # --live:未物化 → pending;物化 → sync;目录里未知 → orphan
-      live=$(${cmd}/bin/dsh-presets --live)
-      echo "$live" | grep -q '✗ fww: declared but not materialized' || { echo "$live" >&2; exit 1; }
-      mkdir -p /tmp/dsh-origins-check/.agent-presets/fww /tmp/dsh-origins-check/.agent-presets/ghost
-      live=$(${cmd}/bin/dsh-presets --live)
-      echo "$live" | grep -q '✓ fww: in sync' || { echo "$live" >&2; exit 1; }
-      echo "$live" | grep -q '? ghost: in ~/.dsh but not in current generation' || { echo "$live" >&2; exit 1; }
+      echo "$_tbl" | grep -qE '^standard\s+replayed\s+dsh$' || { echo "$_tbl" >&2; exit 1; }
+      # --live:web 树 sync / tui 树 pending / headless 无行静默
+      live=$(DSH_HOME=${trees} ${cmd}/bin/dsh-presets --live)
+      echo "$live" | grep -q '✓ web: roster in sync' || { echo "$live" >&2; exit 1; }
+      echo "$live" | grep -q '✗ tui: pending switch' || { echo "$live" >&2; exit 1; }
+      echo "$live" | grep -q headless && { echo "$live" >&2; exit 1; }
+      # --tree:单树诊断(default/roots/sync)
+      t=$(DSH_HOME=${trees} ${cmd}/bin/dsh-presets --tree web)
+      echo "$t" | grep -q 'default: fww' || { echo "$t" >&2; exit 1; }
+      echo "$t" | grep -q '✓ in sync' || { echo "$t" >&2; exit 1; }
+      t=$(DSH_HOME=${trees} ${cmd}/bin/dsh-presets --tree headless)
+      echo "$t" | grep -q 'no roster row' || { echo "$t" >&2; exit 1; }
       # 未知旗标 fail-loud
       if ${cmd}/bin/dsh-presets --bogus 2>/dev/null; then echo "bogus flag must fail" >&2; exit 1; fi
       touch $out

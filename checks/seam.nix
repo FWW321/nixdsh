@@ -361,13 +361,12 @@ in
     ];
   };
 
-  # 默认 preset:per-face 行渲染(进树 userPatches)+ 全局兜底回落 +
-  # settings 协调(per-face 生效 → 全局不进 settings)+ 强一致性负例
-  # (手写 profile 嵌 face bundle / 非 face 插件设值 / freeform 冲突)
+  # roster 接管(两行舞):face 树得到 disable+insert 行(default 进新行
+  # config,roots 指向 farm)+ headless/手写树零行 + settings 恒无
+  # agent-presets 段 + 负例(非 face 设值 / freeform 冲突)
   dsh-default-preset =
     let
       mk = cfg: applyWith cfg;
-      # per-face 值 + 全局兜底:tui 树用 per-值,web 树回落全局
       both = mk {
         defaultPreset = "fww";
         plugins = {
@@ -384,50 +383,111 @@ in
       };
       tuiRows = both.perProfile.tui.extraPatches;
       webRows = both.perProfile.web.extraPatches;
-      rowOf = rows: builtins.head (pkgs.lib.filter (r: r.id == "agent-presets") rows);
-      # 只设全局 → 不出行(settings 热缝),协调标志 false
-      globalOnly = mk {
-        defaultPreset = "fww";
-        plugins = { };
-      };
-      # 负例三连
+      headlessRows = both.perProfile.default.extraPatches;
+      insertRowOf = rows:
+        builtins.head (pkgs.lib.concatMap (r: if r ? insert then r.insert else [ ]) rows);
+      disableRowOf = rows: id:
+        pkgs.lib.filter (r: r.id or null == id && r.disabled or false) rows;
+      # 未设任何 → 行仍在(default 回落 standard,与 base 行原值同)
+      none = mk { plugins = { }; };
+      # 负例
       tryThrow = f: msg:
         let res = builtins.tryEval (builtins.deepSeq (f { }) null);
         in pkgs.lib.assertMsg (!res.success) msg;
       assert' = c: m: pkgs.lib.assertMsg c m;
     in
     pkgs.runCommand "dsh-default-preset-check" { } (builtins.deepSeq ([
-      (assert' ((rowOf tuiRows).config.default == "liangshen")
-        "default-preset: per-plugin value must render into the face tree's roster row")
-      (assert' ((rowOf webRows).config.default == "fww")
-        "default-preset: unset face tree must fall back to the global value")
-      (assert' (globalOnly.defaultPresetRows == { } && !globalOnly.hasFaceDefaultPreset)
-        "default-preset: global-only must stay on the settings seam (no rows, no coordination flag)")
-      (assert' (dshLib.renderSettings {
-        settings = { }; telemetry = { mode = null; }; providers = { }; defaultModel = null;
-        defaultPreset = "fww"; hasFaceDefaultPreset = false;
-      } ? "agent-presets")
-        "default-preset: global-only must render into settings")
+      # tui 树:两行舞(default=per-face 值;roots=farm,trust system)
+      (assert' (builtins.length (disableRowOf tuiRows "agent-presets") == 1)
+        "roster: base agent-presets row must be disabled on face trees")
+      (assert' ((insertRowOf tuiRows).id == "agent-presets-nix")
+        "roster: replacement instance must insert under a distinct id")
+      (assert' ((insertRowOf tuiRows).config.default == "liangshen")
+        "roster: per-plugin defaultPreset must ride the insert row")
+      (assert' ((insertRowOf tuiRows).config.roots == [
+        { path = both.presetFarm; trust = "system"; }
+      ]) "roster: roots must point at the farm with system trust")
+      # web 树:未设 per-face → 回落全局 fww
+      (assert' ((insertRowOf webRows).config.default == "fww")
+        "roster: unset face must fall back to the global defaultPreset")
+      # headless/手写树:零舞行(无 roster 语义,不引入服务)
+      (assert' (disableRowOf headlessRows "agent-presets" == [ ]
+        && pkgs.lib.filter (r: r ? insert && (builtins.head r.insert).id or null == "agent-presets-nix") headlessRows == [ ])
+        "roster: non-face trees must not receive the dance")
+      # 未设任何:舞行仍在,default 回落 standard(base 行原值同)
+      (let webNone = (mk { plugins."web-app" = {
+              enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
+              profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+            }; }).perProfile.web.extraPatches; in
+        assert' ((insertRowOf webNone).config.default == "standard")
+          "roster: nothing configured must default to standard (base parity)")
+      # settings 恒无 agent-presets 段(roster 接管后无 settings 面)
       (assert' (!(dshLib.renderSettings {
-        settings = { }; telemetry = { mode = null; }; providers = { }; defaultModel = null;
-        defaultPreset = "fww"; hasFaceDefaultPreset = true;
+        settings = { }; telemetry = { mode = null; }; providers = { };
+        defaultModel = null;
       } ? "agent-presets"))
-        "default-preset: per-face active must suppress the global settings entry (shadowing)")
+        "roster: renderSettings must never emit agent-presets")
       (tryThrow (mk {
         profiles."my-web".plugins = [ "@deepseek-ai/dsh-base" "@deepseek-ai/dsh-web-app" ];
-      }) "default-preset: hand-written profile embedding a face bundle must throw (plugin channel exclusivity)")
+      }) "roster: hand-written profile embedding a face bundle must throw (plugin channel exclusivity)")
       (tryThrow (mk {
         plugins.rotator = {
           enable = true; face = false; source = "./fixture-rotator";
           profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
           defaultPreset = "x";
         };
-      }) "default-preset: defaultPreset on a non-face plugin must throw")
+      }) "roster: defaultPreset on a non-face plugin must throw")
       (tryThrow (mk {
         defaultPreset = "fww";
         settings."agent-presets".default = "manual";
-      }) "default-preset: freeform settings.\"agent-presets\" + typed defaultPreset must throw")
+      }) "roster: freeform settings.\"agent-presets\" + typed defaultPreset must throw")
     ]) "touch $out");
+
+  # roster 接管 boot 级端到端:真 web 树(base+web-app)+ 舞行 →
+  # dump-config:agent-presets 禁 / agent-presets-nix 进树带 farm roots;
+  # farm 内容:shipped standard 已重放(webFetch 选中 → fetch: true 进
+  # shipped —— 手选逃逸关闭的铁证),minimal 原样(no-op 重放)
+  dsh-roster-boot =
+    let
+      cfg' = {
+        webFetch = "zhipu";
+        webFetchProviders.zhipu.row = {
+          name = "@fww/dsh-web-fetch-zhipu";
+          config.apiKeyEnv = "ZHIPU_API_KEY";
+        };
+        defaultPreset = "fww";
+        plugins."web-app" = {
+          enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
+          profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+        };
+      };
+      applied' = applyWith cfg';
+      inc = applied'.perProfile.web;
+      bundle = dshLib.buildProfile {
+        inherit pkgs;
+        profile = dshLib.mkProfile {
+          name = "web";
+          plugins = [ "@deepseek-ai/dsh-base" "@deepseek-ai/dsh-web-app" ] ++ inc.extraPlugins;
+          userPatchesFile = null;
+          userPatches = inc.extraPatches;
+        };
+      };
+      farm = applied'.presetFarm;
+    in
+    pkgs.runCommand "dsh-roster-boot-check" { } ''
+      ${fx.materialize "web" bundle}
+      ${pkgs.dsh}/bin/dsh --profile web --dump-config > "$TMPDIR/dump.log" 2>&1 \
+        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      grep -q 'id: agent-presets-nix' "$TMPDIR/dump.log" || { cat "$TMPDIR/dump.log" >&2; echo "roster row missing" >&2; exit 1; }
+      # dump 按字母序渲染键:config(含 roots)在 id 行之前
+      grep -B8 'id: agent-presets-nix' "$TMPDIR/dump.log" | grep -q "${farm}" || { cat "$TMPDIR/dump.log" >&2; echo "farm roots missing" >&2; exit 1; }
+      ! grep -q 'entry "agent-presets-nix" not found' "$TMPDIR/dump.log" || { cat "$TMPDIR/dump.log" >&2; exit 1; }
+      # farm 实然:shipped standard 的 fetch 已重放为 true;minimal 无
+      # tool-web 行 → no-op(yq 不炸,原样)
+      grep -q 'fetch: true' "${farm}/standard/agent.cordis.yml" || { echo "farm standard not replayed" >&2; exit 1; }
+      test -f "${farm}/minimal/agent.cordis.yml" || { echo "farm minimal missing" >&2; exit 1; }
+      touch $out
+    '';
 
   # 权限模式:三行同步渲染 + per-face 胜全局(later-wins)+ 负例
   dsh-permission-mode =
@@ -449,7 +509,7 @@ in
       };
       tuiRows = both.perProfile.tui.extraPatches;
       webRows = both.perProfile.web.extraPatches;
-      rowsOf = rows: id: pkgs.lib.filter (r: r.id == id) rows;
+      rowsOf = rows: id: pkgs.lib.filter (r: (r.id or null) == id) rows;
       lastOf = rows: id: builtins.head (pkgs.lib.reverseList (rowsOf rows id));
       # 未设任何 → 零行(维持 base 现状)
       none = mk { plugins = { }; };

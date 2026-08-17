@@ -6,7 +6,7 @@
 #
 # 同时承载:face 推导与自动 profile、_usageAssert(typed×inBox 冲突拦截)、
 # in-box 行、MCP insert 行、webSearch/webFetch 缝行组(disable/insert/选择器)
-{ lib, inBoxFaces, renderSecretAttrs, secretEnvName }:
+{ lib, inBoxFaces, renderSecretAttrs, secretEnvName, validatePresets, buildPresetFarm }:
 
 let
   inherit (lib)
@@ -220,13 +220,13 @@ let
         else null;
       allProfileNames = (attrNames cfg.profiles) ++ (attrNames facePlugins);
 
-      # ── 默认 preset(per-face 值 + 全局兜底,行 patch 形态)──────────
-      # 消费者是树上的 agent-presets roster 行,不是插件 —— 但值的
-      # 声明点挂交互插件(defaultPreset 经 faceName 找树,改名自动跟随)。
-      # 非 face 插件设值 → 无树可渲染 → throw(强一致性的对偶面)。
-      # settings 协调:行 config 是 settings 的 base,settings 用户层
-      # 恒胜 → 任一 per-face 值生效时全局不进 settings(否则遮蔽全部
-      # 行),改下沉为各树行 patch 的兜底值。
+      # ── 默认 preset + roster 接管(两行舞,face 树)───────────────────
+      # 机制(实证 profile-boot-*.js:180):clobber 只打 id "agent-presets"
+      # —— 禁 base 行(随之行失效),异 id 重插同包实例带自定义 roots,
+      # roster = [farm(system), user]。default 直接进新行 config
+      # (settings 协调退役:行恒在,settings 用户层恒胜行 —— freeform
+      # 撞 typed 仍 throw)。值的声明点挂交互插件(defaultPreset 经
+      # faceName 找树,改名自动跟随);非 face 插件设值 → throw。
       globalDefaultPreset = cfg.defaultPreset or null;
       _defaultPresetAssert =
         let
@@ -245,7 +245,7 @@ let
         if noTree != [ ] then
           throw "programs.dsh.plugins.${builtins.head noTree}: defaultPreset set on a non-face plugin (no interactive tree to render into — face trees come exclusively from face plugins; global defaultPreset covers the rest)"
         else if freeformClash then
-          throw "programs.dsh: settings.\"agent-presets\" freeform declaration conflicts with defaultPreset/plugins.<name>.defaultPreset — the settings user layer would shadow the row patches; drop the freeform section or the typed option"
+          throw "programs.dsh: settings.\"agent-presets\" freeform declaration conflicts with defaultPreset/plugins.<name>.defaultPreset — the settings user layer would shadow the roster rows; drop the freeform section or the typed option"
         else null;
       # per-插件值 → 树名(经 faceName 推导,与 faceProfiles 生成同链)
       faceDefaultPresetRows =
@@ -260,20 +260,6 @@ let
             (cfg.plugins or { }));
         in
         listToAttrs (map (e: nameValuePair e.tree e.value) fromPlugins);
-      hasFaceDefaultPreset = faceDefaultPresetRows != { };
-      # 最终行集:per-树值,缺省回落全局(仅自动 face 树有 roster 行;
-      # 手写 profile/headless 无行 → 行 patch warn-skip 无害,不渲染)
-      defaultPresetRows =
-        if !hasFaceDefaultPreset then { }
-        else
-          mapAttrs
-            (tree: _:
-              { id = "agent-presets"; config.default = faceDefaultPresetRows.${tree} or globalDefaultPreset; })
-            facePlugins;
-      # 只设全局 → settings 热缝(renderSettings 消费);设了 per-face
-      # → 全局不进 settings(hasFaceDefaultPreset 协调),树行兜底已含
-      effectiveGlobalPreset =
-        if hasFaceDefaultPreset then null else globalDefaultPreset;
 
       # ── 权限模式(新会话默认;宿主组合层,per-face 物理成立)─────────
       # 三行同步一致(sandbox-policy.mode / approval.policy /
@@ -697,6 +683,40 @@ let
           (attrNames (cfg.plugins or { }));
       discoveredPresets = discovered.presets;
       discoveredOrigins = discovered.origins;
+
+      # ── preset farm(roster 根,单一 store 目录)────────────────────
+      # 全部 preset 重放产物:shipped 全量(能力行进 shipped —— 手选
+      # 逃逸关闭)+ discovered + declared(声明即接管,同名胜)。
+      # 行组与旧物化语义一致(insert 行被 buildPreset 自然滤掉)
+      declaredPresets = validatePresets (cfg.presets or { });
+      presetFarm = buildPresetFarm {
+        inherit pkgs;
+        rows = wfRows ++ wsProviderRows ++ wsSelectorRow;
+        declared = declaredPresets;
+        discovered = discoveredPresets;
+      };
+      # 两行舞:禁 base 行(clobber 只打 id "agent-presets",随之失效)
+      # + 异 id 重插同包实例带 farm roots。default = per-face 值,
+      # 缺省全局,再缺省 standard(与 base 行原值同)。仅 face 树
+      # (base/headless 无 roster 行,插入即引入服务 —— 不做)
+      presetRosterRows = tree:
+        let
+          fallback = if globalDefaultPreset != null then globalDefaultPreset else "standard";
+          default = faceDefaultPresetRows.${tree} or fallback;
+        in
+        [
+          { id = "agent-presets"; disabled = true; }
+          {
+            insert = [ {
+              id = "agent-presets-nix";
+              name = "@deepseek-ai/dsh-agent-presets";
+              config = {
+                inherit default;
+                roots = [ { path = toString presetFarm; trust = "system"; } ];
+              };
+            } ];
+          }
+        ];
      in
      builtins.seq _faceExclusivityAssert (builtins.seq _defaultPresetAssert (builtins.seq _permissionAssert (builtins.seq _subagentAssert {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜过)
@@ -713,10 +733,8 @@ let
       inherit discoveredPresets;
       # discovered 归属配套输出(preset id → 插件名;dsh-presets 命令链)
       inherit discoveredOrigins;
-      # 默认 preset:per-face 行集(键 = 树名)+ 协调标志/全局值(renderSettings
-      # 消费:per-face 生效时全局不进 settings,防 settings 用户层遮蔽行)
-      inherit defaultPresetRows hasFaceDefaultPreset;
-      effectiveGlobalPreset = effectiveGlobalPreset;
+      # roster 接管:farm 路径(dsh-presets 命令消费)+ 两行舞进 face 树
+      presetFarm = toString presetFarm;
       # 权限模式:全局行组(进所有树前部;per-face 行 later-wins 胜)
       inherit permissionRowsFor;
       # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
@@ -739,8 +757,8 @@ let
               ++ wfRows
               ++ mcpPatches
               ++ subagentRows
-              ++ (lib.optionals (defaultPresetRows ? ${profileName})
-                [ (defaultPresetRows.${profileName}) ])
+              ++ (lib.optionals (facePlugins ? ${profileName})
+                (presetRosterRows profileName))
               ++ (if globalPermissionMode == null then [ ] else permissionRowsFor profileName)
               ++ (lib.optionals (facePermissionRows ? ${profileName})
                 (permissionRowsFor profileName));
