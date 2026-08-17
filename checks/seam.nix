@@ -367,11 +367,11 @@ in
   dsh-default-preset =
     let
       mk = cfg: applyWith cfg;
-      # 全局 fww = shipped standard 的换名 fork(声明接管)—— id 枚举
+      # 全局 custom-standard = shipped standard 的换名 fork(声明接管)—— id 枚举
       # 校验的正例通道:declared 集命中
-      fwwFork = { presets.fww.source = dshLib.shippedPreset pkgs "standard"; };
-      both = mk (fwwFork // {
-        defaultPreset = "fww";
+      customStandardFork = { presets.custom-standard.source = dshLib.shippedPreset pkgs "standard"; };
+      both = mk (customStandardFork // {
+        defaultPreset = "custom-standard";
         plugins = {
           "dsh-tui" = {
             enable = true; face = null; source = null; profiles = [ ];
@@ -410,8 +410,8 @@ in
       (assert' ((insertRowOf tuiRows).config.roots == [
         { path = both.presetFarm; trust = "system"; }
       ]) "roster: roots must point at the farm with system trust")
-      # web 树:未设 per-face → 回落全局 fww
-      (assert' ((insertRowOf webRows).config.default == "fww")
+      # web 树:未设 per-face → 回落全局 custom-standard
+      (assert' ((insertRowOf webRows).config.default == "custom-standard")
         "roster: unset face must fall back to the global defaultPreset")
       # headless/手写树:零舞行(无 roster 语义,不引入服务)
       (assert' (disableRowOf headlessRows "agent-presets" == [ ]
@@ -479,8 +479,8 @@ in
           name = "@fww/dsh-web-fetch-zhipu";
           config.apiKeyEnv = "ZHIPU_API_KEY";
         };
-        presets.fww.source = dshLib.shippedPreset pkgs "standard";
-        defaultPreset = "fww";
+        presets.custom-standard.source = dshLib.shippedPreset pkgs "standard";
+        defaultPreset = "custom-standard";
         plugins."web-app" = {
           enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
           profiles = [ ]; settings = { }; patches = [ ]; patchId = null;

@@ -505,7 +505,7 @@ plugins."web-dev" = {
 
 ```nix
 plugins.dsh-tui.defaultPreset = "liangshen";  # tui 树默认(改名自动跟随)
-programs.dsh.defaultPreset = "fww";           # 其余树兜底(再缺省 standard)
+programs.dsh.defaultPreset = "custom-standard"; # 其余树兜底(再缺省 standard)
 ```
 
 值直接进各 face 树 `agent-presets-nix` 行的 `config.default`(见下节
@@ -677,8 +677,8 @@ activation 物化整体退役**,旧物化区带 stamp 目录一次性清理)。
 
 ```nix
 # liangshen 零声明:dsh-tui enabled → preset 自动发现接管(进 farm)
-presets.fww.source = lib.mkDefault (nixdsh.lib.shippedPreset pkgs "standard"); # 换名
-defaultPreset = "fww";   # 进各树 agent-presets-nix 行(不再走 settings)
+presets.custom-standard.source = nixdsh.lib.shippedPreset pkgs "standard"; # 换名 fork
+defaultPreset = "custom-standard"; # 进各树 agent-presets-nix 行(不再走 settings)
 webFetch = "zhipu";      # fetch:true 重放进全部 preset(含 shipped —— 逃逸已关)
 ```
 

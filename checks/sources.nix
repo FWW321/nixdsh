@@ -343,14 +343,14 @@ in
         dshLib.presetOrigins { inherit pkgs declared discoveredOrigins; };
       origins = mkOrigins {
         declared = {
-          fww = dshLib.shippedPreset pkgs "standard"; # fork(shipped 路径)
+          custom-standard = dshLib.shippedPreset pkgs "standard"; # fork(shipped 路径)
           mine = pkgs.hello.outPath;                  # 非 shipped 源
         };
         discoveredOrigins = { liangshen = "dsh-tui"; };
       };
       farm = dshLib.buildPresetFarm {
         inherit pkgs;
-        declared = { fww = dshLib.shippedPreset pkgs "standard"; };
+        declared = { custom-standard = dshLib.shippedPreset pkgs "standard"; };
         discovered = { };
         rows = [ ];
       };
@@ -362,13 +362,13 @@ in
       # --live/--tree 的树夹具:web 树 in-sync(roots=farm)、tui 树旧 farm
       trees = pkgs.runCommand "origins-trees" { } ''
         mkdir -p $out/profiles/web $out/profiles/tui $out/profiles/headless
-        printf '%s' '[{"insert":[{"id":"agent-presets-nix","name":"@deepseek-ai/dsh-agent-presets","config":{"default":"fww","roots":[{"path":"${farm}","trust":"system"}]}}]}]' > $out/profiles/web/cordis.patch.yml
+        printf '%s' '[{"insert":[{"id":"agent-presets-nix","name":"@deepseek-ai/dsh-agent-presets","config":{"default":"custom-standard","roots":[{"path":"${farm}","trust":"system"}]}}]}]' > $out/profiles/web/cordis.patch.yml
         printf '%s' '[{"insert":[{"id":"agent-presets-nix","name":"@deepseek-ai/dsh-agent-presets","config":{"default":"liangshen","roots":[{"path":"/nix/store/0000000000000000000000000000000-dsh-preset-farm-old","trust":"system"}]}}]}]' > $out/profiles/tui/cordis.patch.yml
         printf '[]' > $out/profiles/headless/cordis.patch.yml
       '';
     in
     pkgs.runCommand "dsh-preset-origins-check" { } (builtins.deepSeq ([
-      (assert' (origins.fww.mode == "declared" && origins.fww.forkOf == "standard")
+      (assert' (origins.custom-standard.mode == "declared" && origins.custom-standard.forkOf == "standard")
         "preset-origins: declared source inside shipped root must carry forkOf")
       (assert' (origins.mine.mode == "declared" && !(origins.mine ? forkOf))
         "preset-origins: declared source outside shipped root must not carry forkOf")
@@ -383,7 +383,7 @@ in
       done
       # 默认表:三态齐 + fork 标注
       _tbl=$(${cmd}/bin/dsh-presets)
-      echo "$_tbl" | grep -qE '^fww\s+declared\s+presets.fww' || { echo "$_tbl" >&2; exit 1; }
+      echo "$_tbl" | grep -qE '^custom-standard\s+declared\s+presets.custom-standard' || { echo "$_tbl" >&2; exit 1; }
       echo "$_tbl" | grep -q 'shipped:standard' || { echo "forkOf annotation missing" >&2; exit 1; }
       echo "$_tbl" | grep -qE '^liangshen\s+discovered\s+plugins.dsh-tui' || { echo "$_tbl" >&2; exit 1; }
       echo "$_tbl" | grep -qE '^standard\s+replayed\s+dsh$' || { echo "$_tbl" >&2; exit 1; }
@@ -394,7 +394,7 @@ in
       echo "$live" | grep -q headless && { echo "$live" >&2; exit 1; }
       # --tree:单树诊断(default/roots/sync)
       t=$(DSH_HOME=${trees} ${cmd}/bin/dsh-presets --tree web)
-      echo "$t" | grep -q 'default: fww' || { echo "$t" >&2; exit 1; }
+      echo "$t" | grep -q 'default: custom-standard' || { echo "$t" >&2; exit 1; }
       echo "$t" | grep -q '✓ in sync' || { echo "$t" >&2; exit 1; }
       t=$(DSH_HOME=${trees} ${cmd}/bin/dsh-presets --tree headless)
       echo "$t" | grep -q 'no roster row' || { echo "$t" >&2; exit 1; }
