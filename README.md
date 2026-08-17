@@ -753,6 +753,43 @@ agent 定义文件,subagent 暴露完全由 preset 工具行决定,现有机制�
 `disabled`(standard 注释原文即此教法)—— `presets.<id>.patches`
 逃生口的教科书用例;③ permissionMode 的隐式下传见该节 caveat。
 
+### subagent 实例(subagents typed 面)
+
+```nix
+programs.dsh.subagents = {
+  researcher = {                                    # attr 名 = 实例名
+    enable = true;
+    backgroundMode = "continuable";                 # one-shot(缺省)| continuable
+    agentOptions = {                                # child 模型路由(全可省 = 继承父)
+      provider = "zai-coding-cn";
+      model = "glm-5.3";
+    };
+    toolFilter.deny = [ "web_fetch" ];
+    # toolName 缺省派生 "subagent_researcher";persona/maxDepth/enableRunInBackground 见 options
+  };
+};
+```
+
+每个实例渲染一行 `dsh-tool-subagent`(insert 通道,同 MCP —— 新行
+id 不在树上,裸 patch 只会 warn+skip),落宿主组合层 **global 层**:
+preset 会话经 dsh-tools `view()` 的 global 基底看到新 toolName
+(preset 只遮蔽**同名**)—— 与 wf/ws 行组的同 id 遮蔽根因不同,
+**无需 preset 重放**。
+
+设计裁决(为何纯全局、无 `profiles` 键):行是 agent 面能力,与前端
+无关;face 分化已能穿过 preset 轴免费获得(per-face `defaultPreset`
+选带/不带 delegation 行的 preset)。启用 shipped 禁用行
+(`subagent_claude_code`/`subagent_codex`)不归本面管 —— 那是
+preset 内既有行的 `disabled` 去除,走 `presets.<id>.patches`。
+
+求值期查重(上游 "already registered" 是 boot 期晚期 throw,TODO
+已认):实例间 toolName 重复 / 撞 base 全局名(`subagent`/
+`subagent_fork`)或全局控制工具(`send_message`/`interrupt_agent`/
+`list_agents`/`report`)/ attr 名 `fork`(生成行 id 撞 base 的
+`tool-subagent-fork`)→ throw。`maxDepth` 允许 0(= 禁止该实例的
+child 再委托);`provider-managed` 仅出进程 provider 有意义,不进
+typed(走 patches 逃生口)。
+
 **方式 A:进 registry(常用插件,nixvim 式零样板)**
 
 ```sh
@@ -881,6 +918,7 @@ dshLib.mkDsh {
 users/me/dsh/
 ├── default.nix     # enable + defaultProfile + web 服务 + imports
 ├── settings.nix    # settings/telemetry
+├── subagents.nix   # subagents 实例表(可选)
 └── profiles/
     ├── default.nix # imports
     ├── web.nix     # web profile(含插件声明)

@@ -153,6 +153,137 @@ in
       '';
     };
 
+    # ── subagent 委托实例(模型面工具行,宿主组合层 insert)──────────
+    # 每个 subagents.<name> = 一个 @deepseek-ai/dsh-tool-subagent 行
+    # (同包多实例、各异 toolName)。刻意纯全局:无 profiles 键 —— face
+    # 分化已能穿过 preset 轴免费获得(per-face defaultPreset 选带/不带
+    # delegation 行的 preset;行是 agent 面能力,与前端无关),且行在
+    # 宿主组合层 global 层对 preset 会话可见(dsh-tools view():global
+    # 是所有 scope 视图基底,preset 只遮蔽同名 —— 无需 preset 重放,
+    # 与 wf/ws 同 id 遮蔽需重放的根因不同)。机制调研见 README。
+    subagents = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
+        options = {
+          enable = lib.mkEnableOption "subagent 实例 ${name}" // {
+            default = false;
+          };
+          toolName = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "subagent_researcher";
+            description = ''
+              模型面工具名,跨实例唯一(撞 base 自带 subagent/subagent_fork
+              或全局控制工具名 → 求值期 throw,早于上游 boot 期的晚期
+              already registered)。null = 派生 "subagent_\<name\>"。
+            '';
+          };
+          provider = lib.mkOption {
+            # in-process 双后端;out-of-process(acp/codex 等)走
+            # presets.<id>.patches 逃生口(须自带 provider 行)
+            type = lib.types.enum [ "spawn" "fork" ];
+            default = "spawn";
+            description = ''
+              spawn = 全新 child、空会话、需自足 prompt、继承父 model;
+              fork = 种入父已完成 turn 前缀(进行中 turn 不含)。
+            '';
+          };
+          backgroundMode = lib.mkOption {
+            type = lib.types.nullOr (lib.types.enum [ "one-shot" "continuable" ]);
+            default = null;
+            example = "continuable";
+            description = ''
+              one-shot = 前台等结果/Task 后台(job_output 收割);continuable =
+              durable child + send_message 追加 turn + settlement notice。
+              null 省略(上游默认 one-shot)。注:fork+continuable 会因
+              child 侧 report 工具段打乱继承前缀而弃 KV 复用(base 因此
+              钉 fork 为 one-shot;standard preset 已翻转为 continuable,
+              以源码为准)。
+            '';
+          };
+          enableRunInBackground = lib.mkOption {
+            type = lib.types.nullOr lib.types.bool;
+            default = null;
+            description = "暴露 run_in_background 参数(null 省略,上游默认 true)";
+          };
+          agentOptions = lib.mkOption {
+            type = lib.types.nullOr (lib.types.submodule {
+              options = {
+                provider = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  description = "child 的 LLM 路由名(null 省略 = 继承父)";
+                };
+                model = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  description = "child 的模型 id,按 provider 路由解析(null 省略 = 继承父)";
+                };
+                maxTokens = lib.mkOption {
+                  type = lib.types.nullOr lib.types.ints.positive;
+                  default = null;
+                  description = "child 每请求输出上限";
+                };
+              };
+            });
+            default = null;
+            description = "child 模型路由覆盖(全 null 省略 = 整键不渲染)";
+          };
+          persona = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "child 专职 persona(遮蔽 child 作用域提示文本)";
+          };
+          toolFilter = lib.mkOption {
+            type = lib.types.nullOr (lib.types.submodule {
+              options = {
+                allow = lib.mkOption {
+                  type = lib.types.listOf lib.types.str;
+                  default = [ ];
+                  description = "白名单(与 deny 至少一个非空)";
+                };
+                deny = lib.mkOption {
+                  type = lib.types.listOf lib.types.str;
+                  default = [ ];
+                  description = "黑名单";
+                };
+              };
+            });
+            default = null;
+            description = ''
+              child 全局工具过滤(注意:非父派生权限上限,上游明示
+              security non-goal)。allow/deny 均空 = 整键省略。
+            '';
+          };
+          maxDepth = lib.mkOption {
+            # 0 合法(= 禁止再委托);'provider-managed' 仅出进程 provider
+            # 有意义,typed 只留 int
+            type = lib.types.nullOr lib.types.ints.unsigned;
+            default = null;
+            example = 2;
+            description = "委托深度绝对上限(含本实例;null 省略 = 上游默认 3)";
+          };
+        };
+      }));
+      default = { };
+      example = lib.literalExpression ''
+        {
+          researcher = {
+            enable = true;
+            backgroundMode = "continuable";
+            agentOptions = { provider = "zai-coding-cn"; model = "glm-5.3"; };
+            toolFilter.deny = [ "web_fetch" ];
+          };
+        }
+      '';
+      description = ''
+        subagent 委托实例表(每实例一行 dsh-tool-subagent,insert 进
+        所有树;child 组合恒 join 父 preset,模型每调只传
+        description/prompt/run_in_background)。per-preset 增删行(如
+        启用 shipped 禁用行 subagent_claude_code)走
+        presets.\<id\>.patches 逃生口。
+      '';
+    };
+
     # ── 配置承载型 typed 选项(三态:null 禁用/{} 显式启用/attrs 配置)──
     # 设计准则与可见性规则见 README「插件形态与通道选择」:禁用行进
     # 所有 profile 用户 patch 层;attrs 渲染进对应 settings 命名空间段

@@ -497,4 +497,93 @@ in
         };
       }) "permission-mode: permissionMode on a non-face plugin must throw")
     ]) "touch $out");
+
+  # subagent 实例:insert 行形状(空字段省略)+ 全局分发(普通树与 face
+  # 树都有)+ 未声明零行 + 负例(工具名重复/撞控制工具/行 id 撞 base)
+  dsh-subagents =
+    let
+      mk = cfg: applyWith cfg;
+      inherit (pkgs.lib) concatMap filter;
+      both = mk {
+        subagents = {
+          researcher = {
+            enable = true;
+            backgroundMode = "continuable";
+            agentOptions = {
+              provider = "zai-coding-cn"; model = "glm-5.3"; maxTokens = null;
+            };
+            toolFilter.deny = [ "web_fetch" ];
+          };
+          quick = {
+            enable = true;
+            provider = "fork";
+            maxDepth = 0;
+          };
+        };
+        plugins = {
+          "web-app" = {
+            enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
+            profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+          };
+        };
+      };
+      # insert 行抽取:profile 行列表里 id 匹配的 insert 包内行
+      rowsIn = rows: concatMap (r: if r ? insert then r.insert else [ ]) rows;
+      rowIn = tree: id:
+        let rows = rowsIn both.perProfile.${tree}.extraPatches; in
+        builtins.head (filter (r: r.id == id) rows);
+      countIn = tree: id:
+        let rows = rowsIn both.perProfile.${tree}.extraPatches; in
+        builtins.length (filter (r: r.id == id) rows);
+      # enable=false 不出行;未声明零行
+      disabled = mk { subagents.sleeper = { enable = false; }; };
+      none = mk { };
+      # 负例三连(fixture 无 module system,enable 显式给)
+      tryThrow = f: msg:
+        let res = builtins.tryEval (builtins.deepSeq (f { }) null);
+        in pkgs.lib.assertMsg (!res.success) msg;
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-subagents-check" { } (builtins.deepSeq ([
+      # 形状:toolName 派生 / provider 默认 spawn / 空字段省略
+      (assert' ((rowIn "default" "tool-subagent-researcher").config == {
+        provider = "spawn";
+        toolName = "subagent_researcher";
+        backgroundMode = "continuable";
+        agentOptions.provider = "zai-coding-cn";
+        agentOptions.model = "glm-5.3";
+        toolFilter.deny = [ "web_fetch" ];
+      }) "subagents: full instance row must render derived toolName and omit null fields")
+      # fork 实例:显式 provider + maxDepth 0,无 backgroundMode 键
+      (assert' ((rowIn "default" "tool-subagent-quick").config == {
+        provider = "fork";
+        toolName = "subagent_quick";
+        maxDepth = 0;
+      }) "subagents: fork instance must render explicit provider and maxDepth, omitting unset keys")
+      # 全局分发:普通树(default)与 face 树(web)各恰一行
+      (assert' (countIn "default" "tool-subagent-researcher" == 1
+        && countIn "default" "tool-subagent-quick" == 1
+        && countIn "web" "tool-subagent-researcher" == 1
+        && countIn "web" "tool-subagent-quick" == 1)
+        "subagents: rows must land on every tree exactly once (host composition global layer)")
+      # 行名 = 上游包名(insert 包裹)
+      (assert' ((rowIn "web" "tool-subagent-researcher").name == "@deepseek-ai/dsh-tool-subagent")
+        "subagents: inserted row must name the in-box package")
+      # enable=false / 未声明 → 零行
+      (assert' (rowsIn disabled.perProfile.default.extraPatches == [ ]
+        && rowsIn none.perProfile.default.extraPatches == [ ])
+        "subagents: disabled or undeclared instances must emit nothing")
+      (tryThrow (mk {
+        subagents = {
+          a = { enable = true; toolName = "same_name"; };
+          b = { enable = true; toolName = "same_name"; };
+        };
+      }) "subagents: duplicate toolName across instances must throw")
+      (tryThrow (mk {
+        subagents.a = { enable = true; toolName = "send_message"; };
+      }) "subagents: toolName colliding with global control tools must throw")
+      (tryThrow (mk {
+        subagents.fork = { enable = true; };
+      }) "subagents: attr name generating a row id clashing with base rows must throw")
+    ]) "touch $out");
 }
