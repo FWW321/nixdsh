@@ -48,7 +48,11 @@ programs.dsh.providers = {
     apiKeyEnv = "ZHIPU_API_KEY";
     api = "anthropic-messages";
     baseURL = "https://open.bigmodel.cn/api/anthropic";
-    models = [ { id = "glm-4.7"; contextWindow = 200000; maxTokens = 128000; } ];
+    models = [
+      { id = "glm-5.3"; contextWindow = 1000000; maxTokens = 131072; }
+      { id = "glm-5v-turbo"; input = [ "text" "image" ]; }   # 多模态声明
+      { id = "glm-5.2"; reasoningEfforts.off = null; reasoningEfforts.high = "high"; }
+    ];
   };
 };
 ```
@@ -56,6 +60,17 @@ programs.dsh.providers = {
 凭证值经环境变量注入(`environment` / `home.sessionVariables` / sops),
 wrapper 不落盘密钥。api 取值:`openai-completions` / `openai-responses` /
 `anthropic-messages`;models 整表替换 catalog,modelOverrides 逐模型覆盖。
+
+模型条目是 **typed core + freeform 尾巴** submodule(schema 实测于
+dsh-llm-pi-ai `modelFields`,rc.6):typed 键 = 数据描述符
+(`id`/`name`/`contextWindow`(compaction 触发线)/`maxTokens`(每请求
+输出上限)/`input`(输入模态 `["text","image"]` —— 低报=附件期早拒,
+高报=provider 中途拒且会话卡死,**宁可低报**)/`reasoningEfforts`
+(`false` 或 `{档位: wire 拼写}`,仅 off 可空值)/`compat`
+(thinkingFormat 八方言/supportsReasoningEffort));未 typed 的未来
+新字段裸透传(drift 负债同纯 attrs 形态),typo 也随之透传 —— 由上游
+严格 z.object 在 settings 载入期拒(fail-loud 点名路由/模型)。渲染面
+剥 submodule 的 default null 键(上游 z.number() 拒 null 值键)。
 
 
 ```sh

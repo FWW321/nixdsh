@@ -14,6 +14,92 @@
 
 let
   dshLib = import ../lib.nix { inherit lib; };
+
+  # 模型条目 submodule(models[] 与 modelOverrides 值共享形状,withId 切 id 键)
+    # 模型条目 typed core(models[] 与 modelOverrides 值共享形状,
+  # 后者少 id)。freeformType = attrs:上游加新字段裸透传不炸
+  # (drift 负债与纯 attrs 形态相同);typed 键 = 数据描述符,
+  # 与 defaultModel/subagents 同种(schema 实测于 dsh-llm-pi-ai
+  # lib/index.js modelFields,rc.6)。行为旋钮(transport/retry
+  # 等)不在此,归路由级 attrs 逃生口。typo 与未来新字段 eval 期
+  # 不可区分 → 透传,由上游严格 z.object 在 settings 载入期拒
+  modelEntry = { withId }:
+    let
+      base = {
+        freeformType = lib.types.attrs;
+        options = {
+          name = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "显示名(缺省自动补 \"<displayName 或路由名>/<id>\")";
+          };
+          contextWindow = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            description = ''
+              咨询容量:int(token),压力敏感插件(compaction 触发
+              线)消费。缺省回落 catalog 条目 → 路由
+              defaultContextWindow(上游缺省 262144)。
+            '';
+          };
+          maxTokens = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            description = ''
+              每请求输出上限;请求/agentOptions 显式值恒胜。
+              缺省回落 catalog → defaultMaxTokens(32768)。
+            '';
+          };
+          input = lib.mkOption {
+            type = lib.types.nullOr (lib.types.listOf (lib.types.enum [ "text" "image" ]));
+            default = null;
+            example = [ "text" "image" ];
+            description = ''
+              输入模态声明(多模态)。语义不对称:低报 = harness
+              附件期早拒(错误点名模型,便宜);高报 = provider
+              中途拒(消息已 durable,会话必败重试,贵)—— 宁可
+              低报。缺省回落 catalog 条目 → 路由 defaultInput
+              ([ "text" ])。
+            '';
+          };
+          reasoningEfforts = lib.mkOption {
+            # false = 显式无思考模型;attrs = { level: wire 拼写 }
+            # 映射(off 可空值 = 发空;须含 off 外至少一档)
+            type = lib.types.nullOr (lib.types.oneOf [
+              (lib.types.enum [ false ])
+              (lib.types.attrsOf (lib.types.nullOr lib.types.str))
+            ]);
+            default = null;
+            example = lib.literalExpression ''{ off = null; high = "high"; max = "ultra"; }'';
+            description = ''
+              可选思考档(键 = 选择器档位 off/minimal/low/medium/
+              high/xhigh/max,值 = wire 拼写;仅 off 可 null =
+              发空)。缺省回落 catalog 能力(手声明模型无 catalog
+              条目 → 无思考档)。false = 显式剥离思考。
+            '';
+          };
+          compat = lib.mkOption {
+            type = lib.types.attrs;
+            default = { };
+            example = lib.literalExpression ''{ thinkingFormat = "zai"; }'';
+            description = ''
+              推理方言开关(thinkingFormat: openai|deepseek|
+              openrouter|together|zai|qwen|string-thinking|ant-ling /
+              supportsReasoningEffort: bool;仅 openai-completions)
+            '';
+          };
+        };
+      };
+    in
+    if withId then lib.types.submodule (base // {
+      options = {
+        id = lib.mkOption {
+          type = lib.types.str;
+          description = "模型 id(线上模型名)";
+        };
+      } // base.options;
+    })
+    else lib.types.submodule base;
 in
 {
   options.programs.dsh = {
@@ -528,6 +614,7 @@ in
       '';
     };
 
+
     # ── LLM 供应商路由(dsh-llm-pi-ai 用户层)──────────────────────────
     # 渲染进 settings.yaml `llm-pi-ai.providers` 命名空间段(cordis 树 base
     # 配置之上的用户层,上游按 provider 逐项深合并,免重启生效)。
@@ -581,22 +668,26 @@ in
             '';
           };
           models = lib.mkOption {
-            type = lib.types.listOf lib.types.attrs;
+            type = lib.types.listOf (modelEntry { withId = true; });
             default = [ ];
             example = [
-              { id = "glm-4.7"; contextWindow = 200000; maxTokens = 128000; }
+              { id = "glm-5.3"; contextWindow = 1000000; maxTokens = 131072; }
+              { id = "glm-5v-turbo"; input = [ "text" "image" ]; }
             ];
             description = ''
-              模型清单(整表替换 catalog)。行内键:id 必给;name/contextWindow/
-              maxTokens/compat/reasoningEfforts 按需。行缺 name 时自动补
-              "<displayName 或路由名>/<id>"(/model 里的可读标识;显式 name 优先)。
-              空列表 = 沿用上游 catalog(catalog 路由的默认行为)。
+              模型清单(整表替换 catalog;想留 catalog 既有模型须 id-only
+              重列)。空列表 = 沿用上游 catalog(catalog 路由默认行为)。
+              行缺 name 自动补 "<displayName 或路由名>/<id>"。
             '';
           };
           modelOverrides = lib.mkOption {
-            type = lib.types.attrs;
+            type = lib.types.attrsOf (modelEntry { withId = false; });
             default = { };
-            description = "对 catalog 既有模型条目的字段覆盖(键 = 模型 id;不能与 models 并用)";
+            description = ''
+              对 catalog 既有模型条目的字段覆盖(键 = 模型 id,值 = 同
+              models 条目形状;不能与 models 并用 —— 上游对并置/越界
+              refuse)。catalog 未描述的模型用 models 条目声明。
+            '';
           };
           retryPolicy = lib.mkOption {
             type = lib.types.attrs;

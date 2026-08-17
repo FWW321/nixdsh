@@ -48,7 +48,7 @@ in
       provs = rendered."llm-pi-ai".providers;
       assert' = cond: msg: pkgs.lib.assertMsg cond msg;
       # 接进 buildCommand 才脱离懒求值(Nix check 求值 drv 属性时强制)
-      assertions = toString [
+      assertions = [
         (assert' (provs.deepseek.apiKeyEnv == "DEEPSEEK_API_KEY") "dsh-providers-render: typed must win per-provider")
         (assert' (!provs.deepseek ? displayName) "dsh-providers-render: null fields must be omitted")
         (assert' (!provs.deepseek ? retryPolicy) "dsh-providers-render: empty attrs must be omitted")
@@ -57,15 +57,84 @@ in
         (assert' ((builtins.elemAt provs."zhipu-coding-plan".models 0).name == "Zhipu Coding/glm-4.7") "dsh-providers-render: model name must default to displayName/id")
         (assert' ((builtins.elemAt provs."zhipu-coding-plan".models 1).name == "GLM 5.3") "dsh-providers-render: explicit model name must win")
         (assert' (provs ? other-gateway) "dsh-providers-render: freeform sibling providers must survive")
+        # modelEntry submodule(freeform 尾巴):未 typed 键裸透传;裸 attrs
+        # 直调路径同语义 —— 同一断言覆盖两形态
+        (assert' ((builtins.elemAt provs."zhipu-coding-plan".models 0).contextWindow == 200000)
+          "dsh-providers-render: typed model field must pass through")
+        (assert' ((builtins.elemAt provs."zhipu-coding-plan".models 1).name == "GLM 5.3")
+          "dsh-providers-render: explicit model name must win over derived")
         (assert' (rendered.telemetry.mode == "off") "dsh-providers-render: telemetry merge must still hold")
         (assert' (rendered."agent-default-model".provider == "zhipu-coding-plan") "dsh-providers-render: typed defaultModel must render")
         (assert' (rendered."agent-default-model".reasoning == "low") "dsh-providers-render: freeform defaultModel sibling keys must survive")
         (assert' (!rendered."agent-default-model" ? reasoningEffort) "dsh-providers-render: null reasoningEffort must be omitted")
       ];
+      # modelEntry submodule 真模块路径:input 多模态透传 + 未 typed 键
+      # freeform 尾巴 + typo 负例(eval 期拒)。mkDsh 全模块 eval,与裸
+      # attrs 直调路径(rendered 上方)互补
+      modInst = dshLib.mkDsh {
+        inherit pkgs;
+        modules = [{
+          programs.dsh.providers.zhipu.models = [
+            { id = "glm-5.3"; contextWindow = 1000000; }
+            { id = "glm-5v-turbo"; input = [ "text" "image" ]; }
+            { id = "glm-5.2"; reasoningEfforts = { off = null; high = "high"; }; }
+            { id = "raw-model"; someFutureField = "passthrough"; }
+          ];
+          programs.dsh.providers.zhipu.modelOverrides."glm-4.7".contextWindow = 204800;
+        }];
+      };
+      modCfg = modInst.config.programs.dsh.providers.zhipu;
+      # typo 与未来新字段 eval 期不可区分 → freeform 尾巴透传(设计),
+      # 上游严格 z.object 在 settings 载入期拒未知键(fail-loud 点名)
+      typoEval = builtins.tryEval
+        (let
+          ms = (dshLib.mkDsh {
+            inherit pkgs;
+            modules = [{
+              programs.dsh.providers.zhipu.models = [
+                { id = "bad"; contextwindow = 1000000; }
+              ];
+            }];
+          }).config.programs.dsh.providers.zhipu.models;
+        in builtins.deepSeq ms ms);
+      modAssertions = [
+        (assert' ((builtins.elemAt modCfg.models 1).input == [ "text" "image" ])
+          "dsh-providers-render: input modality must pass the typed model entry")
+        (assert' ((builtins.elemAt modCfg.models 2).reasoningEfforts.off == null)
+          "dsh-providers-render: reasoningEfforts mapping must accept null wire for off")
+        (assert' ((builtins.elemAt modCfg.models 3) ? someFutureField
+          && (builtins.elemAt modCfg.models 3).someFutureField == "passthrough")
+          "dsh-providers-render: freeform tail must pass unknown model fields through")
+        (assert' (modCfg.modelOverrides."glm-4.7".contextWindow == 204800)
+          "dsh-providers-render: modelOverrides entries must share the typed shape")
+        (assert' (typoEval.success
+          && ((builtins.elemAt typoEval.value 0) ? contextwindow)
+          && ((builtins.elemAt typoEval.value 0).contextWindow == null))
+          "dsh-providers-render: mistyped keys must ride the freeform tail (upstream strict schema rejects at settings load)")
+        # submodule default null 键不得流进 settings(上游 z.number() 拒
+        # null 值键):真模块路径渲染后逐条目无 null/空值键
+        (let
+          rendered2 = dshLib.renderSettings {
+            settings = { }; telemetry = { mode = null; };
+            providers.zhipu = {
+              apiKeyEnv = "ZHIPU_API_KEY";
+              inherit (modCfg) models modelOverrides;
+            };
+            defaultModel = null;
+          };
+          entries = rendered2."llm-pi-ai".providers.zhipu.models;
+          badKeys = builtins.filter (e: builtins.any (k: e.${k} == null) (builtins.attrNames e)) entries;
+        in assert' (badKeys == [ ]
+          && !(builtins.elemAt entries 0 ? input)
+          && !(builtins.elemAt entries 0 ? maxTokens)
+          && !(builtins.elemAt entries 0 ? reasoningEfforts)
+          && (builtins.elemAt entries 1).input == [ "text" "image" ])
+          "dsh-providers-render: unset typed model fields must not render as null keys")
+      ];
     in
     # seq 强制断言求值(任一失败 → 求值期 fail-loud),buildCommand 本身无操作
     pkgs.runCommand "dsh-providers-render-check"
-      { } (builtins.seq assertions "touch $out");
+      { } (builtins.deepSeq (assertions ++ modAssertions) "touch $out");
 
   # agent 预设:eval 期校验(缺 agent.cordis.yml → throw;正例 =
   # fixtures/preset-ok 目录);物化脚本在 hm-module activation

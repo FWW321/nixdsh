@@ -36,9 +36,16 @@ let
           # submodule 里 displayName 恒存在(default null),`or` 不触发,须显式判空
           display = p.displayName or null;
           label = if display == null then key else display;
+          # 剥 default null/空键:module system 给未设键填 default
+          # (contextWindow = null 等),上游 z.number() 拒 null 值键 ——
+          # 渲染面须回到"未设即无键"。models 补名(显式判空,`? name`
+          # 在 submodule 下恒真);modelOverrides 不补(只改指定字段,
+          # catalog 模型已有可读基名)
+          stripKeys = lib.filterAttrs (_: v: v != null && v != { } && v != [ ]);
           models = map
-            (m: if m ? name then m else m // { name = "${label}/${m.id}"; })
+            (m: stripKeys (if (m.name or null) != null then m else m // { name = "${label}/${m.id}"; }))
             (p.models or [ ]);
+          modelOverrides = mapAttrs (_: stripKeys) (p.modelOverrides or { });
         in
         (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
           # secretFile 派生:显式 apiKeyEnv 优先,缺省从文件名派生(自描述)
@@ -50,8 +57,7 @@ let
           displayName = p.displayName or null;
           api = p.api or null;
           baseURL = p.baseURL or null;
-          inherit models;
-          modelOverrides = p.modelOverrides or { };
+          inherit models modelOverrides;
           retryPolicy = p.retryPolicy or { };
           defaultContextWindow = p.defaultContextWindow or null;
           defaultMaxTokens = p.defaultMaxTokens or null;
