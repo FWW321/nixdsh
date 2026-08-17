@@ -614,6 +614,32 @@ standard  builtin     dsh
 pending switch;物化在而声明无 = orphan/手写。排障入口
 (未 switch 就找不到 preset / tui conflict 语义确认)。
 
+### 分化轴调研结论(为何只有全局均一 + per-preset 逃生口)
+
+"能不能 per-face 分化能力行(如 tui 树禁 fetch)?" —— rc.6 源码实证,
+四条通道全关,且多数是有意设计:
+
+1. **mount 时 overlay**:`mountPreset`(dsh-agent-presets lib/index.js:707)
+   签名即 `{path}`,无任何 config 覆盖参数 —— preset 文件即终态组合
+   ("a preset IS a composition" 是 API 级承诺)
+2. **per-tree roster roots(最接近的一条,被显式堵死)**:
+   `AgentPresets.Config` 有 `roots: [{path, trust}]`(:808),但
+   profile-boot(lib/profile-boot-*.js:183)在所有 overlay 之后无条件
+   追加 `{id: "agent-presets", config.roots = [shipped root]}` —— 树上
+   声明的 roots 必被 clobber,roster 序恒为 [shipped(system), user]。
+   上游注释明说意图:"a shipped preset still shadows a locally authored
+   directory that claimed its name"(防本地 preset 冒充 shipped)
+3. **settings**:名册 schema 仅 `{default}` 一键(:796)
+4. **DSH_HOME fork**:粒度错 —— 会话历史/settings/skills/密钥全跟 fork,
+   那是"两个用户"不是"一个用户两个面"
+
+结论:preset id 是上游留下的唯一完备分化轴。nixdsh 语义定档:
+全局均一(完备、零新概念)为用户面;`presets.<id>.patches`(行 id 寻址,
+later-wins)为将来按需的逃生口;**face 轴糖物理不可能完备,永不建**
+(会话内手动切 preset 会逃出配置)。真正的通用终局在上游修缝
+(保险丝进 settings/宿主行)—— 通道 2 的 clobber 证据说明上游自己也把
+capability 分化定位在 settings 面,这正是 retiring issue 的方向。
+
 残余边界(架构性质,非方案缺陷):会话内手动选非 default 的 shipped
 preset(standard/cordis)拿到未改写版 —— "a preset IS a
 composition",preset 是终态组合非可深 merge 声明层;根治在上游。
