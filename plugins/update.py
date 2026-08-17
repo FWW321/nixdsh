@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # dsh-plugins-update — vimPlugins update.py 的个人规模 transpose(Python 重写)
 # 读 plugins/names.txt(owner/repo [subpath])→ GitHub API 解析版本
 # (tag 优先,HEAD 回退)→ nix prefetch → 读 package.json(packageName +
@@ -28,7 +27,10 @@ def repo_root() -> Path:
     )
     if out.returncode == 0:
         return Path(out.stdout.strip())
-    sys.exit("usage: update.py [nixdsh-repo-root]  (or run inside the repo / set NIXDSH_ROOT)")
+    sys.exit(
+        "usage: update.py [nixdsh-repo-root]  "
+        "(or run inside the repo / set NIXDSH_ROOT)"
+    )
 
 
 ROOT = repo_root()
@@ -49,7 +51,9 @@ _HEADERS = {"Authorization": f"Bearer {_token}"} if _token else {}
 
 
 def api(path: str):
-    req = urllib.request.Request(f"https://api.github.com/{path}", headers=_HEADERS)
+    req = urllib.request.Request(
+        f"https://api.github.com/{path}", headers=_HEADERS
+    )
     with urllib.request.urlopen(req) as resp:
         return json.load(resp)
 
@@ -89,11 +93,14 @@ def prefetch(owner: str, repo: str, rev: str) -> tuple[str, str]:
 
 def probe_pnpm_hash(src: str) -> str:
     """fetchPnpmDeps hash 发现:fakeHash 构建预期失败,从错误信息取 got:。"""
-    rev = json.loads((ROOT / "flake.lock").read_text())["nodes"]["nixpkgs"]["locked"]["rev"]
+    lock = json.loads((ROOT / "flake.lock").read_text())
+    rev = lock["nodes"]["nixpkgs"]["locked"]["rev"]
     url = f"https://github.com/NixOS/nixpkgs/archive/{rev}.tar.gz"
     expr = (
-        f'(import (builtins.fetchTarball "{url}") {{}}).fetchPnpmDeps.override '
-        f'{{ pnpm = (import (builtins.fetchTarball "{url}") {{}}).pnpm_11; }} {{ '
+        f'(import (builtins.fetchTarball "{url}") {{}})'
+        ".fetchPnpmDeps.override "
+        f'{{ pnpm = (import (builtins.fetchTarball "{url}") {{}}).pnpm_11; }}'
+        " { "
         f'pname = "probe"; version = "1"; src = {src}; '
         f"fetcherVersion = 4; hash = \"{FAKE_HASH}\"; }}"
     )
@@ -147,11 +154,17 @@ def main() -> None:
             dot.get("import") or dot.get("default")
             if isinstance(dot, dict) else dot
         ) or manifest.get("main") or ""
-        main_target = main_target.lstrip("./") if isinstance(main_target, str) else ""
-        needs_build = bool(main_target) and not (pkg_dir / main_target).is_file()
+        main_target = (
+            main_target.lstrip("./") if isinstance(main_target, str) else ""
+        )
+        needs_build = bool(main_target) and not (
+            pkg_dir / main_target
+        ).is_file()
         pnpm_hash = ""
         if needs_build:
-            print(f"  main target {main_target} missing in source → build needed")
+            print(
+                f"  main target {main_target} missing in source → build needed"
+            )
             pnpm_hash = probe_pnpm_hash(src)
             print(f"  pnpmDeps: {pnpm_hash[:19]}…")
 
@@ -220,7 +233,8 @@ def main() -> None:
 
     body = "".join(entries)
     GENERATED.write_text(
-        "# 由 update.py 生成,勿手改(nix run github:FWW321/nixdsh#dsh-plugins-update)\n"
+        "# 由 update.py 生成,勿手改"
+        "(nix run github:FWW321/nixdsh#dsh-plugins-update)\n"
         + ("{ }\n" if not entries else "{\n" + body + "}\n")
     )
     print(f"✓ {GENERATED}")
