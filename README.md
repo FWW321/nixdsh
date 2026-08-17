@@ -516,6 +516,12 @@ per-face 是干净成立的(later-wins 行 patch,无需重放/fork)。
 这是与 defaultPreset 协调同款的"settings 用户层在上"约束,方向相反:
 那边 nixdsh 主动避开,这边是上游 UI 拥有该层。
 
+**caveat(subagent 隐式下传)**:subagent child 的权限在委托边界一次性
+固定 —— 继承父会话的显式 sandbox override,approval 钉死 `never`
+(read-only 父的 child 恒 read-only 且永无审批弹窗,见下方 subagent
+调研节);父事后 switch 不追溯已建 child。per-face permissionMode
+因此自动覆盖该 face 树的全部后代,无需也无法 per-child 配置。
+
 ### "会话默认"型 settings 命名空间全景(实测 installSettingsSection 扫描)
 
 上游 `installSettingsSection` 注册面共 9 家,其中"每会话起点的默认
@@ -683,6 +689,69 @@ capability 分化定位在 settings 面,这正是 retiring issue 的方向。
 残余边界(架构性质,非方案缺陷):会话内手动选非 default 的 shipped
 preset(standard/cordis)拿到未改写版 —— "a preset IS a
 composition",preset 是终态组合非可深 merge 声明层;根治在上游。
+
+### subagent 机制调研(master@47f9438 实证)
+
+包地图(8 个):`dsh-subagent`(service seam:`ctx.subagents` 单例 /
+provider 注册表 / durable descriptor / continuable 编排)+
+`dsh-subagent-{spawn,fork}-in-process`(共享
+`subagent-in-process-driver` 的两个 in-process provider)+
+`dsh-tool-subagent`(模型面委托工具,每 transport 一实例、各异
+toolName)+ `dsh-tool-subagent-control`(全局 `send_message` /
+`interrupt_agent`,+ 可选 `list-agents` 子插件)+
+`dsh-tool-subagent-report`(child 作用域 `report` 回报工具)+
+`dsh-client-ui-subagent`(UI)。
+
+**两种生命周期**:`one-shot` 一次性委托(前台等结果,或
+`run_in_background:true` 注册 Task,`job_output`/`job_kill` 收割);
+`continuable` = durable Session + 进程内 Activation(驻留 epoch)——
+`startContinuable` 返回 durable child id,`send_message` 追加 FIFO
+turn,`interrupt_agent` 只停当前 turn 不 dispose,冷恢复靠持久
+descriptor + 会话日志重放;结算时 manager 无条件给父送 settlement
+notice(stop reason + 最终消息,子未 report 也要送)。
+
+**spawn vs fork**:spawn = 全新 child、空会话、需自足 prompt、继承父
+model/provider;fork = 种入父**已完成 turn 前缀**(截到最后
+`turn/end`,进行中 turn 不含;父尚无完成 turn 则退化为 spawn)——
+只传历史,不传工具限制/权限。注:base 行(dsh-base
+cordis.patch.yml:324)fork 钉 `one-shot`(注释引 fork-one-shot Agent
+Note:continuable 的 report 工具/提示段会打乱继承前缀的字节序,毁掉
+fork 存在意义的 KV 复用),但 standard preset(agent.cordis.yml:193-198)
+已覆盖为 `continuable` —— master 新翻转,fork 包 README"shipped 全
+one-shot"未跟,以 rc.6 源码为准。
+
+**平面归属(印证上文两平面教义,standard preset 注释原文自证)**:
+host 面 = `subagents` 注册表 + spawn/fork 后端(进程单例,api-proxy
+跨会话查它;provider 名只能注册一次 —— preset 放它第二个 session 炸)
++ `tool-subagent-report`(在单例注册 continuable-setup,非
+scope-aware,每 mounted preset 一份会在第二会话重复注册 throw);
+preset 面 = 委托**工具行**(`delegation` 组:standard
+agent.cordis.yml:174 起;minimal 无;`subagent_codex`/
+`subagent_claude_code` 行 `disabled:true` 待启,:203/:212)。
+
+**child 组合强制 join 父 preset**:`applyChildComposition(childCtx,
+parent, composition)` 把 join 做成唯一调用形态 —— 不 join 的 child
+无法表示(join 前模型面工具注册表为空);join 的 preset id 记入 child
+durable header 供冷读重建(取父**live scope 链**而非 header,父中途
+switch 以新组合为准)。**无 per-child preset 选择**,无用户自定义
+agent 文件(不像 opencode `.opencode/agent/*.md`);persona/
+toolFilter/model/maxTokens/maxDepth 全是**工具实例级部署配置**(每个
+`dsh-tool-subagent` 行一份,同实例恒定);模型每调只能传
+`description`/`prompt`/`run_in_background`。
+
+**委托策略固定(与 permissionMode 的交点)**:child 权限在委托边界
+一次性固定 —— capture 父会话**显式** sandbox override 写入 child 自己
+日志(`source: 'delegation'` 的 `sandbox/mode` 事件;冷恢复重放该事件
+而非重新 capture,故父 switch 不追溯已建 child),approval **钉死
+`never`**(无人应答 child 审批,确定性拒绝而非挂起);父无显式
+override 则 child 动态跟部署默认。child runtime-context 带
+`subagent:delegation` 声明(超范围→陈述限制,不重试)。
+
+**对 nixdsh 的含义**:① 无新声明面 —— 无 settings 命名空间、无用户
+agent 定义文件,subagent 暴露完全由 preset 工具行决定,现有机制天然
+覆盖;② 启用 `subagent_claude_code` = fork standard 去掉该行
+`disabled`(standard 注释原文即此教法)—— `presets.<id>.patches`
+逃生口的教科书用例;③ permissionMode 的隐式下传见该节 caveat。
 
 **方式 A:进 registry(常用插件,nixvim 式零样板)**
 
