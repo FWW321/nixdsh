@@ -68,6 +68,23 @@ in
       '';
     };
 
+    permissionMode = lib.mkOption {
+      type = lib.types.nullOr (lib.types.enum [ "read-only" "workspace-write" "danger-full-access" ]);
+      default = null;
+      example = "workspace-write";
+      description = ''
+        新会话默认权限模式(全局;未显式设置的 face 树用它兜底)。
+        与 defaultPreset/webFetch 不同,权限活在宿主组合层(每树一份
+        行,无全局共享物理),per-face 分化物理成立。渲染三行保持
+        一致(sandbox-policy.mode / approval.policy /
+        permission.defaultPreset),防止组合层推断出 "custom"
+        (dsh-permission-presets :116 knobs 不匹配任何 preset 即
+        throw)。caveat:UI 手选"新会话默认权限模式"写进 settings
+        命名空间的运行时用户层,恒胜组合层 —— 设置后本选项被遮蔽
+        (在 UI 里改回即恢复)。
+      '';
+    };
+
     settings = lib.mkOption {
       type = lib.types.attrs;
       default = { };
@@ -616,6 +633,18 @@ in
               programs.dsh.defaultPreset。preset id 存在性不校验:
               手写 preset 在 \$DSH_HOME 是运行时状态,eval 期不可见;
               运行时 roster 自有 UnknownPresetError。
+            '';
+          };
+          permissionMode = lib.mkOption {
+            type = lib.types.nullOr (lib.types.enum [ "read-only" "workspace-write" "danger-full-access" ]);
+            default = null;
+            example = "read-only";
+            description = ''
+              本 face 树的新会话默认权限模式(胜过全局
+              programs.dsh.permissionMode;渲染三行同步一致,见全局项
+              说明)。权限活在宿主组合层,per-face 分化物理成立 ——
+              这与 preset 能力行(preset id 全局共享,只能均一或
+              per-preset fork)是不同的物理。
             '';
           };
           patchId = lib.mkOption {

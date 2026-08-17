@@ -494,6 +494,28 @@ freeform `settings."agent-presets"` 与 typed 同设。preset id 存在性
 不校验(手写 preset 是运行时状态,eval 期不可见;roster 自有
 UnknownPresetError)。
 
+### 权限模式(新会话默认;per-face 物理成立)
+
+```nix
+programs.dsh.permissionMode = "workspace-write";          # 全局兜底
+programs.dsh.plugins.dsh-tui.permissionMode = "read-only"; # per-face 胜
+```
+
+与 preset 能力行**物理相反**:权限活在宿主组合层(`sandbox-policy` /
+`approval` / `permission` 三行,每树一份,行值公式读
+`DSH_PERMISSION_MODE` env),不在全局共享的 preset 层 —— 所以全局 +
+per-face 是干净成立的(later-wins 行 patch,无需重放/fork)。
+
+渲染三行同步一致(`sandbox-policy.mode` / `approval.policy` /
+`permission.defaultPreset`),`danger-full-access` 自动映射
+`approval: never`(与上游 env 公式同构)—— 三行不一致会让组合层
+推断出 "custom" 而炸(dsh-permission-presets :116)。
+
+**caveat**:UI 里"选择新会话的默认权限模式"写的是 settings 命名空间的
+运行时用户层,恒胜组合层 —— 手选过一次后本选项被遮蔽(UI 改回即恢复)。
+这是与 defaultPreset 协调同款的"settings 用户层在上"约束,方向相反:
+那边 nixdsh 主动避开,这边是上游 UI 拥有该层。
+
 ## 服务与 CLI:无共享守护进程(实测 rc.5 依赖图)
 
 **每个 face boot 一棵完整独立的 cordis 树**,不是"后端守护 + 瘦前端"。

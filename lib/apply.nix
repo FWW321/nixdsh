@@ -274,6 +274,47 @@ let
       # → 全局不进 settings(hasFaceDefaultPreset 协调),树行兜底已含
       effectiveGlobalPreset =
         if hasFaceDefaultPreset then null else globalDefaultPreset;
+
+      # ── 权限模式(新会话默认;宿主组合层,per-face 物理成立)─────────
+      # 三行同步一致(sandbox-policy.mode / approval.policy /
+      # permission.defaultPreset),knobs 不匹配任何 preset → 上游
+      # 推断 "custom" → throw(dsh-permission-presets :116)。
+      # 与 defaultPreset 的 settings 协调不同:permission 的 settings
+      # 命名空间是 UI 手选的运行时用户层,nixdsh 不写也不清 —— 行
+      # config 是组合层基底,UI 手选后遮蔽本选项(caveat 入文档)
+      _permissionAssert =
+        let
+          enabledPlugins = lib.filterAttrs (_: p: p.enable) (cfg.plugins or { });
+          noTree = filter
+            (name: (cfg.plugins.${name}.permissionMode or null) != null && faceOf name cfg.plugins.${name} == null)
+            (attrNames enabledPlugins);
+        in
+        if noTree != [ ] then
+          throw "programs.dsh.plugins.${builtins.head noTree}: permissionMode set on a non-face plugin (no interactive tree to render into; global programs.dsh.permissionMode covers the rest)"
+        else null;
+      globalPermissionMode = cfg.permissionMode or null;
+      # per-树值(推导链同 defaultPresetRows);perProfile 注入三行,
+      # later-wins 胜过全局行(全局也进 perProfile 的同一列表前部)
+      facePermissionRows =
+        let
+          faceNameOf = name: p:
+            let f = faceOf name p; in
+            if f == true then lib.removePrefix "dsh-" name else f;
+          fromPlugins = lib.flatten (mapAttrsToList
+            (name: p:
+              let v = p.permissionMode or null; in
+              if p.enable && v != null then [{ tree = faceNameOf name p; value = v; }] else [ ])
+            (cfg.plugins or { }));
+        in
+        listToAttrs (map (e: nameValuePair e.tree e.value) fromPlugins);
+      permissionRowsFor = tree:
+        let mode = facePermissionRows.${tree} or globalPermissionMode; in
+        if mode == null then [ ]
+        else [
+          { id = "sandbox-policy"; config.mode = mode; }
+          { id = "approval"; config.policy = if mode == "danger-full-access" then "never" else "ask"; }
+          { id = "permission"; config.defaultPreset = mode; }
+        ];
       targetsFor = p:
         if p.profiles == [ ] then allProfileNames
         else filter (n: builtins.elem n allProfileNames) p.profiles;
@@ -580,7 +621,7 @@ let
       discoveredPresets = discovered.presets;
       discoveredOrigins = discovered.origins;
      in
-     builtins.seq _faceExclusivityAssert (builtins.seq _defaultPresetAssert {
+     builtins.seq _faceExclusivityAssert (builtins.seq _defaultPresetAssert (builtins.seq _permissionAssert {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜过)
       inherit inBoxPatches;
       # MCP 服务器行(同样全局,追加在 in-box 行之后)
@@ -599,6 +640,8 @@ let
       # 消费:per-face 生效时全局不进 settings,防 settings 用户层遮蔽行)
       inherit defaultPresetRows hasFaceDefaultPreset;
       effectiveGlobalPreset = effectiveGlobalPreset;
+      # 权限模式:全局行组(进所有树前部;per-face 行 later-wins 胜)
+      inherit permissionRowsFor;
       # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
       # 覆盖显式 profile 与自动 face 两类)
       perProfile = listToAttrs
@@ -619,10 +662,13 @@ let
               ++ wfRows
               ++ mcpPatches
               ++ (lib.optionals (defaultPresetRows ? ${profileName})
-                [ (defaultPresetRows.${profileName}) ]);
+                [ (defaultPresetRows.${profileName}) ])
+              ++ (if globalPermissionMode == null then [ ] else permissionRowsFor profileName)
+              ++ (lib.optionals (facePermissionRows ? ${profileName})
+                (permissionRowsFor profileName));
           })
           allProfileNames);
-    });
+     })) ;
 in
 {
   inherit applyPlugins;

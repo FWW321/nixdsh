@@ -428,4 +428,73 @@ in
         settings."agent-presets".default = "manual";
       }) "default-preset: freeform settings.\"agent-presets\" + typed defaultPreset must throw")
     ]) "touch $out");
+
+  # 权限模式:三行同步渲染 + per-face 胜全局(later-wins)+ 负例
+  dsh-permission-mode =
+    let
+      mk = cfg: applyWith cfg;
+      tuiPlug = mode: {
+        enable = true; face = null; source = null; profiles = [ ];
+        settings = { }; patches = [ ]; patchId = null;
+      } // (if mode == null then { } else { permissionMode = mode; });
+      both = mk {
+        permissionMode = "workspace-write";
+        plugins = {
+          "dsh-tui" = tuiPlug "read-only";
+          "web-app" = {
+            enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
+            profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+          };
+        };
+      };
+      tuiRows = both.perProfile.tui.extraPatches;
+      webRows = both.perProfile.web.extraPatches;
+      rowsOf = rows: id: pkgs.lib.filter (r: r.id == id) rows;
+      lastOf = rows: id: builtins.head (pkgs.lib.reverseList (rowsOf rows id));
+      # 未设任何 → 零行(维持 base 现状)
+      none = mk { plugins = { }; };
+      # 负例:非 face 插件设值
+      tryThrow = f: msg:
+        let res = builtins.tryEval (builtins.deepSeq (f { }) null);
+        in pkgs.lib.assertMsg (!res.success) msg;
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-permission-mode-check" { } (builtins.deepSeq ([
+      # tui 树:per-face read-only 三行(later-wins 胜全局)
+      (assert' ((lastOf tuiRows "sandbox-policy").config.mode == "read-only")
+        "permission-mode: per-face mode must win on its tree")
+      (assert' ((lastOf tuiRows "approval").config.policy == "ask")
+        "permission-mode: read-only approval policy must be ask")
+      (assert' ((lastOf tuiRows "permission").config.defaultPreset == "read-only")
+        "permission-mode: permission.defaultPreset must stay in sync")
+      # web 树:回落全局 workspace-write
+      (assert' ((lastOf webRows "sandbox-policy").config.mode == "workspace-write")
+        "permission-mode: unset face must fall back to the global value")
+      (assert' ((lastOf webRows "approval").config.policy == "ask"
+        && (lastOf webRows "permission").config.defaultPreset == "workspace-write")
+        "permission-mode: web tree rows must stay in sync")
+      # danger-full-access → approval never(与上游 env 公式同构)
+      (let danger = mk {
+              permissionMode = "danger-full-access";
+              plugins."web-app" = {
+                enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
+                profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+              };
+            };
+           webDanger = danger.perProfile.web.extraPatches; in
+        assert' ((lastOf webDanger "approval").config.policy == "never")
+          "permission-mode: danger-full-access must map approval to never")
+      # 未设 → 无任何权限行
+      (assert' (rowsOf none.perProfile.default.extraPatches "sandbox-policy" == [ ]
+        && rowsOf none.perProfile.default.extraPatches "approval" == [ ]
+        && rowsOf none.perProfile.default.extraPatches "permission" == [ ])
+        "permission-mode: unset must not emit any rows (base defaults stand)")
+      (tryThrow (mk {
+        plugins.rotator = {
+          enable = true; face = false; source = "./fixture-rotator";
+          profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+          permissionMode = "read-only";
+        };
+      }) "permission-mode: permissionMode on a non-face plugin must throw")
+    ]) "touch $out");
 }
