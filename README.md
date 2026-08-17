@@ -643,6 +643,10 @@ activation 物化整体退役**,旧物化区带 stamp 目录一次性清理)。
   树语义)
 - **耦合注记**:两行舞对 base 行 id `"agent-presets"` 硬耦合 ——
   上游改名则 disable 行 warn-skip + 双服务共存炸(loud,非静默)
+- **UI 标签语义**:preset 菜单的"内置"是 trust 二值不是出处 —— farm
+  全体(system trust)显示内置样式,与 provenance 无关;插件携带的
+  preset(如 liangshen)显示自己的 name/描述(不在上游本地化表),
+  手写的(user 根)带 `· 用户` 后缀。真出处账在 dsh-presets 命令
 
 用法(插件托管 preset 零声明;shipped fork 用助手消布局硬编码):
 
