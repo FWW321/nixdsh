@@ -252,7 +252,13 @@ let
       ${settingsPrelude}
       ${faceDispatch}
       ${profilePrelude}
-      exec ${getExe cfg.package} ${argsStr} "$@"
+      # dsh-tui 启动期对每个版本错位的 peer 打一条 upstream drift 警告
+      # (apply() 无条件 console.warn,无开关;当前 profile 钉 rc.5、tui
+      # validated rc.6 → 23 行/次纯噪音,README 已注记为无害)。wrapper
+      # 层滤掉该模式;要看原始警告直跑 ${cfg.package} 或 bin/dsh(绕过
+      # wrapper)。grep 只丢匹配行,其余 stderr 原样透传(line-buffered)。
+      exec ${getExe cfg.package} ${argsStr} "$@" \
+        2> >(${pkgs.gnugrep}/bin/grep --line-buffered -v '^\[dsh-tui\] upstream drift:' >&2)
     '';
 in
 {

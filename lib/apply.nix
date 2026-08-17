@@ -369,24 +369,55 @@ let
       # 插件随行:设置 mcpServers 即插入 @deepseek-ai/dsh-mcp-client,
       # 无法经 inBoxPlugins 关闭(id 不在树上,disable 行同样 not-found
       # 跳过)—— 不装就删 mcpServers 条目
-      mcpSecret =
-        let
-          renderServer = name: m:
-            let
-              common = { inherit (m) transport; serverName = name; }
-                // (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
-                  toolCallTimeoutMs = m.toolCallTimeoutMs or null;
-                  failOnStartupError = m.failOnStartupError or null;
-                })
-                // (m.settings or { });
-              body =
-                if m.transport == "stdio" then
-                  lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
-                    inherit (m) args env;
-                    command = m.command or null;
-                    cwd = m.cwd or null;
-                  }
-                else
+       # stdio stderr 收纳:SDK 默认 inherit(stdio.js `?? 'inherit'`)
+       # → 子进程日志刷终端(TUI 遮挡)。包装 command 为 sh -c,
+       # stderr 追加到 $XDG_STATE_HOME/deepseek-harness/mcp/<name>.log
+       # (mkdir -p 幂等;日志保留排查能力)。env/cwd 不受影响(row 级
+       # 配置作用在 exec 后的真实进程上)。opt-out 走 mcpStderrToLog。
+       # sh -c 形状:'-c' script <command> <args...> → script 内
+       # $@ = 原命令+参数,原样 exec。
+       mcpStderrToLog = cfg.mcpStderrToLog or true;
+       stderrWrap = name: m:
+         let
+           # 日志文件名内插进双引号串,转义 shell 元字符(attr 名常规是
+           # 标识符,防御即可)
+           logName = lib.escape [ "$" "\"" "\\" "`" ] name;
+           script = ''
+             _d="''${XDG_STATE_HOME:-$HOME/.local/state}/deepseek-harness/mcp"
+             mkdir -p "$_d"
+             exec "$@" 2>>"$_d/${logName}.log"
+           '';
+          in
+          {
+            command = "sh";
+            # '-c' script $0 cmd args...:$0 占位(sh),命令+参数全在 $@ ——
+            # 直接把 cmd 放 $0 位则 exec "$@" 丢命令、把首参数当选项
+            args = [ "-c" script "sh" m.command ] ++ (m.args or [ ]);
+          };
+       mcpSecret =
+         let
+           renderServer = name: m:
+             let
+               common = { inherit (m) transport; serverName = name; }
+                 // (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                   toolCallTimeoutMs = m.toolCallTimeoutMs or null;
+                   failOnStartupError = m.failOnStartupError or null;
+                 })
+                 // (m.settings or { });
+               body =
+                 if m.transport == "stdio" then
+                   let
+                     extras = lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                       inherit (m) env;
+                       cwd = m.cwd or null;
+                     };
+                   in
+                   if mcpStderrToLog then (stderrWrap name m) // extras
+                   else extras // (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
+                     inherit (m) args;
+                     command = m.command or null;
+                   })
+                 else
                   lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
                     url = m.url or null;
                       headers = m.headers or { };

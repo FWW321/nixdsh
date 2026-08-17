@@ -465,6 +465,13 @@ provider 加过审计事件(照官方 recordRequest 模式),实测毒化 —— 
 原生子命令)。不再生成 per-profile wrapper(`dsh-<face>` 等)—— 子命令
 分发等价,独立入口只是 $PATH 噪音,短命令需求由 shell alias 承担。
 
+**stderr 过滤(wrapper 拥有的层)**:dsh-tui 启动期对每个版本错位的
+peer 打一条 `upstream drift` 警告(apply() 无条件 console.warn,无
+开关;profile 钉 rc.5、tui validated rc.6 → 每次 23 行刷屏)。wrapper
+以 `grep --line-buffered -v '^\[dsh-tui\] upstream drift:'` 滤掉该
+模式,其余 stderr 原样透传;要看原始警告直跑 store 里的 `bin/dsh`
+(绕过 wrapper)即恢复。上游版本串对齐后此过滤自然空转。
+
 ## face 树独占插件通道(强一致性教义)
 
 **交互树(face tree)只能由 face 插件生成**;手写 `profiles.<name>` 是
@@ -879,6 +886,19 @@ profiles.web.userPatches = [
 装 —— 代价:偏离声明式,下次 profile stamp 变化时被重置。
 私有 config.json 类插件(如 status-rotator)运行时写插件目录会因 store
 只读失败,插件自身回退默认;确需改其配置时用此逃生口。
+
+## stdio MCP 子进程 stderr 收纳
+
+上游 mcp-client 不传 SDK 的 `stderr` 选项 → `@modelcontextprotocol/sdk`
+stdio.js 默认 `inherit`:GitHub/zai 等 server 的启动日志直通终端,
+TUI 里刷屏遮挡(SDK spawn 行 `stdio: ['pipe','pipe', stderr ?? 'inherit']`,
+任何 boot 会话的入口都中招)。
+
+nixdsh 渲染期默认把 stdio server 的 `command` 包成
+`sh -c '… exec "$@" 2>>$XDG_STATE_HOME/deepseek-harness/mcp/<name>.log'`
+(`mcpStderrToLog`,默认 true):日志保留排查能力、终端干净;`false`
+恢复原始 inherit 形状。env/cwd 语义不变(row 配置作用在 exec 后的
+真实进程);`$XDG_STATE_HOME` 缺省回落 `~/.local/state`。
 
 ## 密钥生命周期(store 零密钥,物化层明文)
 

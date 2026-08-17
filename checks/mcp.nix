@@ -60,6 +60,24 @@ in
       fs = byId."mcp-filesystem".config;
       rm = byId."mcp-remote".config;
       gh = byId."mcp-gh".config;
+      # opt-out:mcpStderrToLog = false → 原始 command/args 原样
+      fsRaw = (builtins.listToAttrs (map
+        (r: { name = r.id; value = r; })
+        (pkgs.lib.flatten (map (r: r.insert or [ ]) (applyWith {
+          mcpStderrToLog = false;
+          mcpServers.filesystem = {
+            transport = "stdio";
+            command = "/run/current-system/sw/bin/npx";
+            args = [ "-y" "@modelcontextprotocol/server-filesystem" "/home" ];
+            env = { };
+            cwd = null;
+            url = null;
+            headers = { };
+            toolCallTimeoutMs = null;
+            failOnStartupError = false;
+            settings = { };
+          };
+        }).mcpPatches))))."mcp-filesystem".config;
       allInsertShaped = builtins.all (r: r ? insert && builtins.length r.insert == 1) rows;
       refs = (applyWith {
         mcpServers = { gh.env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = "/run/secrets/fake-gh"; };
@@ -72,6 +90,15 @@ in
       (assert' (fs.serverName == "filesystem" && fs.command != null) "dsh-mcp-render: stdio server must carry serverName+command")
       (assert' (!fs ? cwd && !fs ? toolCallTimeoutMs) "dsh-mcp-render: null fields must be omitted")
       (assert' (fs.reconnect.maxAttempts == 5) "dsh-mcp-render: settings escape hatch must merge into config")
+      # stderr 收纳默认开:command 包成 sh -c,script 落 <name>.log,
+      # 原命令+参数原样跟随($@ 形状)
+      (assert' (fs.command == "sh" && pkgs.lib.elemAt fs.args 0 == "-c"
+        && pkgs.lib.elemAt fs.args 1 == "sh"
+        && pkgs.lib.hasInfix "filesystem.log" (pkgs.lib.elemAt fs.args 2)
+        && pkgs.lib.drop 3 fs.args == [ "/run/current-system/sw/bin/npx" "-y" "@modelcontextprotocol/server-filesystem" "/home" ])
+        "dsh-mcp-render: stdio must be sh-wrapped with per-server stderr log by default")
+      (assert' (fsRaw.command == "/run/current-system/sw/bin/npx" && fsRaw.args == [ "-y" "@modelcontextprotocol/server-filesystem" "/home" ])
+        "dsh-mcp-render: mcpStderrToLog=false must restore the raw command shape")
       (assert' (rm ? url && rm ? headers && rm.toolCallTimeoutMs == 30000) "dsh-mcp-render: streamable-http must carry url/headers")
       (assert' (!rm ? command && !rm ? args) "dsh-mcp-render: http server must not carry stdio fields")
       (assert' (rm.headers.Authorization == "Bearer @dsh-secret:/run/secrets/fake-token@") "dsh-mcp-render: secretFile header must render prefix+placeholder")
@@ -127,6 +154,46 @@ in
       grep -q REALTOKEN123 "$pf" || { echo "secret not injected"; cat "$pf"; exit 1; }
       ! grep -q '@dsh-secret:' "$pf" || { echo "placeholder survived"; exit 1; }
       [ "$(stat -c %a "$pf")" = "600" ] || { echo "mode not 0600: $(stat -c %a "$pf")"; exit 1; }
+      touch $out
+    '';
+
+  # stderr 收纳行为级:按渲染产物原样启动(stdio 行默认 sh -c 包装),
+  # 验证 stdout 正常/stderr 不漏终端/日志落 $XDG_STATE_HOME(参数含
+  # 空格的传递也一并覆盖)
+  dsh-mcp-stderr-log =
+    let
+      noisy = pkgs.writeShellScript "noisy-mcp" ''
+        echo "BOOT-NOISE-STDERR" >&2
+        echo "READY-STDOUT"
+      '';
+      fs = (builtins.listToAttrs (map
+        (r: { name = r.id; value = r; })
+        (pkgs.lib.flatten (map (r: r.insert or [ ]) (applyWith {
+          mcpServers.noisy = {
+            transport = "stdio";
+            command = toString noisy;
+            args = [ "--flag" "with space" ];
+            env = { };
+            cwd = null;
+            url = null;
+            headers = { };
+            toolCallTimeoutMs = null;
+            failOnStartupError = false;
+            settings = { };
+          };
+        }).mcpPatches))))."mcp-noisy".config;
+      run = pkgs.lib.concatStringsSep " "
+        ([ fs.command ] ++ map pkgs.lib.escapeShellArg fs.args);
+    in
+    pkgs.runCommand "dsh-mcp-stderr-log-check" { } ''
+      export XDG_STATE_HOME="$TMPDIR/state" HOME="$TMPDIR/home"
+      ${run} > "$TMPDIR/out.log" 2> "$TMPDIR/err.log" \
+        || { cat "$TMPDIR/err.log" >&2; exit 1; }
+      grep -q READY-STDOUT "$TMPDIR/out.log" || { echo "stdout lost" >&2; exit 1; }
+      ! grep -q BOOT-NOISE-STDERR "$TMPDIR/err.log" \
+        || { echo "stderr leaked to terminal" >&2; exit 1; }
+      grep -q BOOT-NOISE-STDERR "$TMPDIR/state/deepseek-harness/mcp/noisy.log" \
+        || { echo "stderr log missing" >&2; exit 1; }
       touch $out
     '';
 

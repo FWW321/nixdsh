@@ -162,6 +162,31 @@ in
       touch $out
     '');
 
+  # wrapper stderr 过滤行为级:dsh-tui 的 upstream drift 警告(无开关的
+  # console.warn,当前 rc.5/rc.6 错位 → 每次 23 行)被滤掉,其余 stderr
+  # 原样透传(逃生口 = 绕过 wrapper 直跑 dsh)
+  dsh-wrapper-drift-filter =
+    let
+      fakeDsh = pkgs.writeShellScriptBin "dsh" ''
+        echo "[dsh-tui] upstream drift: @deepseek-ai/dsh-agent installed=0.1.0-rc.5 validated=0.1.0-rc.6 — noise" >&2
+        echo "real stderr line" >&2
+        echo "stdout ok"
+      '';
+      wrapper = dshLib.renderWrapper {
+        cfg = mkFakeCfg { package = fakeDsh; };
+        inherit pkgs;
+      };
+    in
+    pkgs.runCommand "dsh-wrapper-drift-filter-check" { } ''
+      ${wrapper}/bin/dsh > "$TMPDIR/out.log" 2> "$TMPDIR/err.log" || true
+      grep -q "stdout ok" "$TMPDIR/out.log" || { echo "stdout lost" >&2; exit 1; }
+      grep -q "real stderr line" "$TMPDIR/err.log" \
+        || { echo "non-drift stderr must pass through" >&2; exit 1; }
+      ! grep -q "upstream drift" "$TMPDIR/err.log" \
+        || { echo "drift warnings must be filtered" >&2; exit 1; }
+      touch $out
+    '';
+
   # inBoxPlugins 双向渲染:disable/enable/config 三态行落进 bundle patch
   dsh-inbox-rows =
     let

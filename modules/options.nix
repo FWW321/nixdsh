@@ -1159,13 +1159,29 @@ in
           };
         }
       '';
+       description = ''
+         MCP 服务器声明:每条渲染一个 insert 条目到所有 profile
+         (id = mcp-\<name\>,serverName = attr 名)。插件
+         @deepseek-ai/dsh-mcp-client 随行插入,不在默认树也无须
+         inBoxPlugins 启用 —— 要卸载就删条目本身(经 inBoxPlugins
+         disable 无效:id 不在树上)。schema 实测于 dsh-mcp-client
+         (判别联合:stdio / streamable-http)。
+       '';
+     };
+
+    # stdio MCP 子进程的 stderr 重定向。上游 mcp-client 不传 SDK 的
+    # stderr 选项 → SDK 默认 inherit(@modelcontextprotocol/sdk stdio.js
+    # `?? 'inherit'`):GitHub/zai 等 server 的启动日志直通终端,在
+    # TUI 里刷屏遮挡。true = 渲染期把 command 包成 sh -c,stderr 追加到
+    # $XDG_STATE_HOME/deepseek-harness/mcp/<name>.log(保留排查能力);
+    # false = 保持 inherit(无包装,终端可见)。
+    mcpStderrToLog = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
       description = ''
-        MCP 服务器声明:每条渲染一个 insert 条目到所有 profile
-        (id = mcp-\<name\>,serverName = attr 名)。插件
-        @deepseek-ai/dsh-mcp-client 随行插入,不在默认树也无须
-        inBoxPlugins 启用 —— 要卸载就删条目本身(经 inBoxPlugins
-        disable 无效:id 不在树上)。schema 实测于 dsh-mcp-client
-        (判别联合:stdio / streamable-http)。
+        stdio MCP 子进程 stderr 重定向到状态目录日志
+        (''$XDG_STATE_HOME/deepseek-harness/mcp/\<name\>.log,默认
+        ~/.local/state/...)。关掉恢复终端 inherit(上游 SDK 默认)。
       '';
     };
 
