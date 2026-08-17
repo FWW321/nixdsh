@@ -28,7 +28,7 @@ let
     inherit (secret) renderSecretAttrs secretEnvName;
     inherit (inbox) inBoxFaces;
     inherit (settings) validatePresets;
-    inherit (preset) buildPresetFarm;
+    inherit (preset) buildPresetFarm shippedPresetNames;
   };
   wrapper = import ./wrapper.nix {
     inherit lib;

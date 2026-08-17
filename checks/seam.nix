@@ -363,24 +363,27 @@ in
 
   # roster 接管(两行舞):face 树得到 disable+insert 行(default 进新行
   # config,roots 指向 farm)+ headless/手写树零行 + settings 恒无
-  # agent-presets 段 + 负例(非 face 设值 / freeform 冲突)
+  # agent-presets 段 + 负例(非 face 设值 / freeform 冲突 / 未知 id)
   dsh-default-preset =
     let
       mk = cfg: applyWith cfg;
-      both = mk {
+      # 全局 fww = shipped standard 的换名 fork(声明接管)—— id 枚举
+      # 校验的正例通道:declared 集命中
+      fwwFork = { presets.fww.source = dshLib.shippedPreset pkgs "standard"; };
+      both = mk (fwwFork // {
         defaultPreset = "fww";
         plugins = {
           "dsh-tui" = {
             enable = true; face = null; source = null; profiles = [ ];
             settings = { }; patches = [ ]; patchId = null;
-            defaultPreset = "liangshen";
+            defaultPreset = "liangshen"; # discovered 命中(dsh-tui 托管)
           };
           "web-app" = {
             enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
             profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
           };
         };
-      };
+      });
       tuiRows = both.perProfile.tui.extraPatches;
       webRows = both.perProfile.web.extraPatches;
       headlessRows = both.perProfile.default.extraPatches;
@@ -438,9 +441,30 @@ in
         };
       }) "roster: defaultPreset on a non-face plugin must throw")
       (tryThrow (mk {
-        defaultPreset = "fww";
+        defaultPreset = "standard"; # 已知 id:throw 只可能来自 freeform 冲突
         settings."agent-presets".default = "manual";
       }) "roster: freeform settings.\"agent-presets\" + typed defaultPreset must throw")
+      # id 枚举校验负例:未声明的 id(拼写错/手写运行时 preset)→ throw;
+      # 同款全局与 per-face 两面
+      (tryThrow (mk {
+        defaultPreset = "standerd"; # typo of standard
+      }) "roster: unknown global defaultPreset must throw (enum check)")
+      (tryThrow (mk {
+        plugins."dsh-tui" = {
+          enable = true; face = null; source = null; profiles = [ ];
+          settings = { }; patches = [ ]; patchId = null;
+          defaultPreset = "standerd";
+        };
+      }) "roster: unknown per-face defaultPreset must throw (enum check)")
+      # 黑名单 id 锚定默认 = 矛盾声明 → throw(被踢出 discovered)
+      (tryThrow (mk {
+        plugins."dsh-tui" = {
+          enable = true; face = null; source = null; profiles = [ ];
+          settings = { }; patches = [ ]; patchId = null;
+          excludedPresets = [ "liangshen" ];
+          defaultPreset = "liangshen";
+        };
+      }) "roster: blacklisted preset as defaultPreset must throw (contradiction)")
     ]) "touch $out");
 
   # roster 接管 boot 级端到端:真 web 树(base+web-app)+ 舞行 →
@@ -455,6 +479,7 @@ in
           name = "@fww/dsh-web-fetch-zhipu";
           config.apiKeyEnv = "ZHIPU_API_KEY";
         };
+        presets.fww.source = dshLib.shippedPreset pkgs "standard";
         defaultPreset = "fww";
         plugins."web-app" = {
           enable = true; face = null; source = "@deepseek-ai/dsh-web-app";

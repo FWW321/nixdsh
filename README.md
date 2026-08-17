@@ -512,8 +512,16 @@ programs.dsh.defaultPreset = "fww";           # 其余树兜底(再缺省 standa
 roster 接管)—— **无 settings 面**:settings 用户层恒胜组合层行,
 故 nixdsh 从不写 `settings."agent-presets"`(freeform 与 typed 同设 →
 throw;仅 freeform = 用户自管逃生口,文档化遮蔽语义)。负例全
-fail-loud:非 face 插件设值 / freeform 冲突。preset id 存在性不校验
-(手写 preset 是运行时状态;roster 自有 UnknownPresetError)。
+fail-loud:非 face 插件设值 / freeform 冲突 / **未知 id**(枚举校验)。
+
+**id 枚举校验**(求值期 fail-loud,模块 enum 引用兄弟配置会递归 →
+以断言等价实现,excludedPresets 同款):合法集 = shipped ∪ declared
+(`presets.<id>.source`)∪ discovered(插件托管)——三集求值期全可知
+(shipped 经 readDir 枚举,与 buildPresetFarm 同源)。手写
+`$DSH_HOME` preset 不在集内:可 UI 手选(roster user 根热发现照旧),
+但不得锚定声明式默认 —— 要锚定就声明接管(DSH_HOME 清空后默认仍在);
+拼写错即时 throw 并列出全集。黑名单 id 被 excludedPresets 踢出
+discovered → 锚定它 = 矛盾声明,throw。
 
 ### 权限模式(新会话默认;per-face 物理成立)
 

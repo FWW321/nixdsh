@@ -6,7 +6,7 @@
 #
 # 同时承载:face 推导与自动 profile、_usageAssert(typed×inBox 冲突拦截)、
 # in-box 行、MCP insert 行、webSearch/webFetch 缝行组(disable/insert/选择器)
-{ lib, inBoxFaces, renderSecretAttrs, secretEnvName, validatePresets, buildPresetFarm }:
+{ lib, inBoxFaces, renderSecretAttrs, secretEnvName, validatePresets, buildPresetFarm, shippedPresetNames }:
 
 let
   inherit (lib)
@@ -15,6 +15,7 @@ let
     attrValues
     concatMap
     concatStringsSep
+    elem
     filter
     listToAttrs
     mapAttrs
@@ -241,11 +242,33 @@ let
             && ((cfg.defaultPreset or null) != null
               || any (name: (cfg.plugins.${name}.defaultPreset or null) != null)
                 (attrNames enabledPlugins));
+          # id 枚举校验(eval 期可知全集 = shipped ∪ declared ∪ discovered;
+          # shipped 经 readDir 枚举,与 buildPresetFarm 同源同 IFD 前例)。
+          # 模块 enum 类型引用兄弟配置会递归,故以 fail-loud 断言等价实现
+          # (excludedPresets 同款:throw 列出全集)。手写 $DSH_HOME preset
+          # 仍可 UI 手选(roster user 根热发现),但不得锚定声明式默认 ——
+          # 要锚定就经 presets.<id>.source 声明接管(DSH_HOME 清空后默认
+          # 仍在)。黑名单 id 被踢出 discovered → 同样拒(矛盾声明)。
+          knownIds =
+            (attrNames declaredPresets)
+            ++ (attrNames discoveredPresets)
+            ++ shippedPresetNames pkgs;
+          knownMsg = concatStringsSep ", " knownIds;
+          globalUnknown =
+            globalDefaultPreset != null && !elem globalDefaultPreset knownIds;
+          badFaces = filter
+            (t: !elem faceDefaultPresetRows.${t} knownIds)
+            (attrNames faceDefaultPresetRows);
+          headBadFace = builtins.head badFaces;
         in
         if noTree != [ ] then
           throw "programs.dsh.plugins.${builtins.head noTree}: defaultPreset set on a non-face plugin (no interactive tree to render into — face trees come exclusively from face plugins; global defaultPreset covers the rest)"
         else if freeformClash then
           throw "programs.dsh: settings.\"agent-presets\" freeform declaration conflicts with defaultPreset/plugins.<name>.defaultPreset — the settings user layer would shadow the roster rows; drop the freeform section or the typed option"
+        else if globalUnknown then
+          throw "programs.dsh.defaultPreset: '${globalDefaultPreset}' is not a known preset (known: ${knownMsg}) — typo, or a hand-written runtime preset? Declare it via programs.dsh.presets.<id>.source to anchor the declarative default (hand-written presets stay UI-selectable)"
+        else if badFaces != [ ] then
+          throw "programs.dsh.plugins.*.defaultPreset (tree '${headBadFace}'): '${faceDefaultPresetRows.${headBadFace}}' is not a known preset (known: ${knownMsg}) — typo, excludedPresets blacklisted, or hand-written? Declare it via programs.dsh.presets.<id>.source (hand-written presets stay UI-selectable)"
         else null;
       # per-插件值 → 树名(经 faceName 推导,与 faceProfiles 生成同链)
       faceDefaultPresetRows =

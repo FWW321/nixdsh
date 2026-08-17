@@ -151,6 +151,12 @@ in
         plugins.\<name\>.defaultPreset 生效时全局不进 settings,
         下沉为各树行 patch 的兜底值(自动协调,免遮蔽)。与 freeform
         settings."agent-presets" 同设 → 求值期 throw。
+
+        id 枚举校验(求值期 fail-loud):合法集 = shipped ∪ declared
+        (presets.\<id\>.source)∪ discovered(插件托管)。手写
+        \$DSH_HOME preset 不在其中 —— 它可经 UI 手选(roster user 根
+        热发现),但不得锚定声明式默认;要锚定就声明接管
+        (presets.\<id\>.source),DSH_HOME 清空后默认仍在。
       '';
     };
 
@@ -852,9 +858,10 @@ in
               本 face 树的默认 agent preset(渲染为树上 agent-presets
               行的 default 重述;face 改名自动跟随)。仅交互插件可设
               (非 face 插件无树 → throw)。未设的树回落全局
-              programs.dsh.defaultPreset。preset id 存在性不校验:
-              手写 preset 在 \$DSH_HOME 是运行时状态,eval 期不可见;
-              运行时 roster 自有 UnknownPresetError。
+              programs.dsh.defaultPreset。id 枚举校验(求值期
+              fail-loud):合法集 = shipped ∪ declared ∪ discovered
+              —— 与全局项同款,含 excludedPresets 黑名单拒斥
+              (黑名单 id 已被踢出 discovered,锚定它 = 矛盾声明)。
             '';
           };
           permissionMode = lib.mkOption {
