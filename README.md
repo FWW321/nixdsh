@@ -516,6 +516,24 @@ per-face 是干净成立的(later-wins 行 patch,无需重放/fork)。
 这是与 defaultPreset 协调同款的"settings 用户层在上"约束,方向相反:
 那边 nixdsh 主动避开,这边是上游 UI 拥有该层。
 
+### "会话默认"型 settings 命名空间全景(实测 installSettingsSection 扫描)
+
+上游 `installSettingsSection` 注册面共 9 家,其中"每会话起点的默认
+选择"型(有 UI + 运行时用户层遮蔽 caveat)已全部 typed:
+
+| 命名空间 | 键 | 值域 | nixdsh 面 |
+|---|---|---|---|
+| `permission` | `defaultPreset` | 3 preset 名(SANDBOX_MODES) | ✅ permissionMode(enum 三值) |
+| `agent-presets` | `default` | roster id(运行时集) | ✅ defaultPreset(str) |
+| `agent-default-model` | 模型 id | provider 注册表(运行时集) | ✅ defaultModel(str) |
+
+其余为纯行为旋钮(无"会话默认"概念,无双层问题):`agent-loop`
+(maxParallelToolCalls 等)、`shell`(bash/pwsh timeout 等)、
+`llm-deepseek`/`pi-ai`(retry 策略)、`web-search-deepseek`。
+**均不预制 typed 选项**:freeform settings 今日可达,rc 阶段 schema
+未稳,typed 化 = 每次 bump 背 drift 负债;触发条件出现再按需做
+(候选优先序:maxParallelToolCalls → shell.timeoutMs → llm retry)。
+
 ## 服务与 CLI:无共享守护进程(实测 rc.5 依赖图)
 
 **每个 face boot 一棵完整独立的 cordis 树**,不是"后端守护 + 瘦前端"。
