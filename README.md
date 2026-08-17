@@ -590,6 +590,30 @@ webFetch = "zhipu";   # 自动重放 fetch:true 进所有 preset(发现 + 声明
 :796 `AgentPresetSettingsSchema = z.object({ default: z.string() })`,
 能力配置不可能经 settings 穿透 preset 面,已实证,重放层不可省。)
 
+### dsh-presets 命令(出处总账)
+
+`dsh-presets` 列出全部 preset 及其归属与接管方式(构建期 JSON 快照,
+命令只读、零 eval):
+
+```
+$ dsh-presets
+code      builtin     dsh
+cordis    builtin     dsh
+fww       declared    presets.fww ← shipped:standard
+liangshen discovered  plugins.dsh-tui
+minimal   builtin     dsh
+standard  builtin     dsh
+```
+
+- **builtin**:runtime 自带只读参考(dsh 升级集合自动跟随),不物化
+- **declared**:`presets.<name>` 显式接管;source 落在 shipped root 内
+  → 标 `← shipped:<名>`(换名 fork)
+- **discovered**:插件源自动发现接管,`plugins.<插件名>` 即归属
+
+`--live` 对比物化区 `~/.dsh/.agent-presets/`:声明在而未物化 =
+pending switch;物化在而声明无 = orphan/手写。排障入口
+(未 switch 就找不到 preset / tui conflict 语义确认)。
+
 残余边界(架构性质,非方案缺陷):会话内手动选非 default 的 shipped
 preset(standard/cordis)拿到未改写版 —— "a preset IS a
 composition",preset 是终态组合非可深 merge 声明层;根治在上游。

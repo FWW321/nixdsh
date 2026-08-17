@@ -265,4 +265,57 @@ in
       (pkgs.lib.assertMsg (lib.removeSuffix "\n" fetchVal == "true")
         "preset-replay-drift: shipped standard no longer takes the tool-web fetch rewrite (upstream row shape changed — update the replay row ids in lib/apply.nix)")
     ]) "touch $out");
+
+  # preset 出处总账:三态组装 + fork 标注 + excluded 不进账 + 命令渲染
+  # (命令本体真跑:默认表 + --live 三态)
+  dsh-preset-origins =
+    let
+      mkOrigins = { declared ? { }, discoveredOrigins ? { } }:
+        dshLib.presetOrigins { inherit pkgs declared discoveredOrigins; };
+      origins = mkOrigins {
+        declared = {
+          fww = dshLib.shippedPreset pkgs "standard"; # fork(shipped 路径)
+          mine = pkgs.hello.outPath;                  # 非 shipped 源
+        };
+        discoveredOrigins = { liangshen = "dsh-tui"; };
+      };
+      excludedCase = mkOrigins {
+        declared = { fww = dshLib.shippedPreset pkgs "standard"; };
+        discoveredOrigins = { };
+      };
+      cmd = dshLib.mkPresetOriginsCmd {
+        inherit pkgs origins;
+        dshHome = "/tmp/dsh-origins-check";
+      };
+      assert' = c: m: pkgs.lib.assertMsg c m;
+    in
+    pkgs.runCommand "dsh-preset-origins-check" { } (builtins.deepSeq ([
+      (assert' (origins.fww.mode == "declared" && origins.fww.forkOf == "standard")
+        "preset-origins: declared source inside shipped root must carry forkOf")
+      (assert' (origins.mine.mode == "declared" && !(origins.mine ? forkOf))
+        "preset-origins: declared source outside shipped root must not carry forkOf")
+      (assert' (origins.liangshen == { mode = "discovered"; origin = "plugins.dsh-tui"; })
+        "preset-origins: discovered preset must map to its plugin")
+      (assert' (origins ? standard && origins.standard == { mode = "builtin"; origin = "dsh"; })
+        "preset-origins: shipped presets must be listed as builtin")
+      (assert' (builtins.length (builtins.attrNames excludedCase) > 0)
+        "preset-origins: builtin set must never be empty")
+    ]) ''
+      # 默认表:三态齐 + fork 标注
+      _tbl=$(${cmd}/bin/dsh-presets)
+      echo "$_tbl" | grep -qE '^fww\s+declared\s+presets.fww' || { echo "$_tbl" >&2; exit 1; }
+      echo "$_tbl" | grep -q 'shipped:standard' || { echo "forkOf annotation missing" >&2; exit 1; }
+      echo "$_tbl" | grep -qE '^liangshen\s+discovered\s+plugins.dsh-tui' || { echo "$_tbl" >&2; exit 1; }
+      echo "$_tbl" | grep -qE '^standard\s+builtin\s+dsh$' || { echo "$_tbl" >&2; exit 1; }
+      # --live:未物化 → pending;物化 → sync;目录里未知 → orphan
+      live=$(${cmd}/bin/dsh-presets --live)
+      echo "$live" | grep -q '✗ fww: declared but not materialized' || { echo "$live" >&2; exit 1; }
+      mkdir -p /tmp/dsh-origins-check/.agent-presets/fww /tmp/dsh-origins-check/.agent-presets/ghost
+      live=$(${cmd}/bin/dsh-presets --live)
+      echo "$live" | grep -q '✓ fww: in sync' || { echo "$live" >&2; exit 1; }
+      echo "$live" | grep -q '? ghost: in ~/.dsh but not in current generation' || { echo "$live" >&2; exit 1; }
+      # 未知旗标 fail-loud
+      if ${cmd}/bin/dsh-presets --bogus 2>/dev/null; then echo "bogus flag must fail" >&2; exit 1; fi
+      touch $out
+    '');
 }

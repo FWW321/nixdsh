@@ -522,7 +522,9 @@ let
       # conflict 永不碰;插件 disable → 孤儿清理随动。用户显式
       # presets.<name> 声明与发现撞名 → 显式胜(声明即接管先例,
       # 合流在 hm-module 侧:discovered // declared)
-      discoveredPresets =
+      # 单次扫描双轨:{ presets = 接管面(既有语义); origins = 插件归属
+      # (preset id → 插件名;dsh-presets 命令数据源,lib.presetOrigins 消费) }
+      discovered =
         let
           scanSrc = src:
             if builtins.isPath src then
@@ -547,8 +549,11 @@ let
               unknown = filter (id: !scanned ? ${id}) excluded;
             in
             if unknown != [ ] then
-              throw "programs.dsh.plugins.${name}: excludedPresets lists '${builtins.head unknown}' but the plugin ships no such preset (detected: ${concatStringsSep ", " (attrNames scanned)}) — typo, or stale after an upstream drop?"
+              throw "programs.dsh.plugins.${name}: excludedPresets lists '${builtins.head unknown}' but the plugin ships no such preset (detected: ${concatStringsSep ", " (attrNames scanned)}) — typo, or stale after upstream drop?"
             else builtins.removeAttrs scanned excluded;
+          scanOf = name: p:
+            let r = builtins.tryEval (sourceOf name p); in
+            if r.success then filterExcluded name p (scanSrc r.value) else { };
         in
         # tryEval:sourceOf 对未知插件 throw(与插件分发同语义),发现面
         # 不放大 —— 单个插件源解析失败不影响其余(该错误在分发路径已
@@ -557,17 +562,23 @@ let
         # 与 excludedPresets 非空同设 → 矛盾声明 throw
         builtins.foldl'
           (acc: name:
-            let p = (cfg.plugins or { }).${name} or null; in
+            let
+              p = (cfg.plugins or { }).${name} or null;
+              merge = scanned: {
+                presets = acc.presets // scanned;
+                origins = acc.origins // mapAttrs (_: _: name) scanned;
+              };
+            in
             if p == null || !p.enable then acc
             else if !(p.presets or true) then
               (if (p.excludedPresets or [ ]) != [ ] then
                 throw "programs.dsh.plugins.${name}: presets = false (take over none) conflicts with a non-empty excludedPresets — pick one"
                else acc)
-            else
-              let r = builtins.tryEval (sourceOf name p); in
-              if r.success then acc // (filterExcluded name p (scanSrc r.value)) else acc)
-          { }
-          (attrNames cfg.plugins);
+            else merge (scanOf name p))
+          { presets = { }; origins = { }; }
+          (attrNames (cfg.plugins or { }));
+      discoveredPresets = discovered.presets;
+      discoveredOrigins = discovered.origins;
      in
      builtins.seq _faceExclusivityAssert (builtins.seq _defaultPresetAssert {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜过)
@@ -582,6 +593,8 @@ let
       inherit facePlugins;
       # 插件源自动发现的 preset(显式声明合流在消费侧,显式胜)
       inherit discoveredPresets;
+      # discovered 归属配套输出(preset id → 插件名;dsh-presets 命令链)
+      inherit discoveredOrigins;
       # 默认 preset:per-face 行集(键 = 树名)+ 协调标志/全局值(renderSettings
       # 消费:per-face 生效时全局不进 settings,防 settings 用户层遮蔽行)
       inherit defaultPresetRows hasFaceDefaultPreset;

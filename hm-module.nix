@@ -113,11 +113,25 @@ let
     ++ cfg.web.extraArgs
   );
 in
+let
+  # preset 出处总账(构建期快照,命令只读不 eval):三态 + fork 标注
+  presetOriginsJSON = dshLib.presetOrigins {
+    inherit pkgs;
+    declared = dshLib.validatePresets cfg.presets;
+    inherit (applied) discoveredOrigins;
+  };
+  # dsh-presets 命令(lib 层,checks 直测;--live 对比物化区)
+  dshPresetsCmd = dshLib.mkPresetOriginsCmd {
+    inherit pkgs;
+    origins = presetOriginsJSON;
+    dshHome = cfg.dshHome;
+  };
+in
 {
   imports = [ ./modules/options.nix ];
 
   config = lib.mkIf cfg.enable {
-    home.packages = [ mainWrapper ];
+    home.packages = [ mainWrapper dshPresetsCmd ];
 
     xdg.dataFile."bash-completion/completions/${cfg.binName}".text =
       bashCompletion;

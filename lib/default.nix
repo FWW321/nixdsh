@@ -71,6 +71,9 @@ in
     ;
   inherit (preset)
     buildPreset
+    mkPresetOriginsCmd
+    presetOrigins
     shippedPreset
+    shippedPresetNames
     ;
 }
