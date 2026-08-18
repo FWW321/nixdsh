@@ -42,12 +42,51 @@ let
   buildPlugin =
     name: e:
     let
-      src = fetchFromGitHub {
+      mainSrc = fetchFromGitHub {
         owner = e.owner;
         repo = e.repo;
         rev = e.rev;
         hash = e.hash;
       };
+
+      # git 子模块物化树。两层都必须看到同一棵树:根 lockfile 把子模块内
+      # 的包记作 workspace importer,缺席即 --frozen-lockfile 拒绝 ——
+      # fetchPnpmDeps 的独立沙箱也不例外,故合成在 derivation 外完成。
+      # 路径以仓库根为基准;当前唯一用例(dsh-TUI)包根 = 仓库根(无
+      # subpath),两者并存时须改为相对包根解析
+      submodules = e.submodules or [ ];
+      subTrees = map (s: rec {
+        inherit (s) path;
+        src = fetchFromGitHub { inherit (s) owner repo rev hash; };
+        # 含独立 pnpm-lock.yaml 的子模块 = 自带构建工具链的工作区
+        deps =
+          if s ? pnpmHash
+          then fetchPnpmDeps {
+            pname = "dsh-plugin-${name}-${s.repo}";
+            inherit (e) version;
+            src = src;
+            inherit pnpm;
+            fetcherVersion = 4;
+            hash = s.pnpmHash;
+          }
+          else null;
+      }) submodules;
+
+      src =
+        if submodules == [ ]
+        then mainSrc
+        else
+          runCommand "source" { }
+            (
+              ''
+                cp -r ${mainSrc}/. "$out"
+                chmod -R u+w "$out"
+              ''
+              + lib.concatMapStrings (t: ''
+                rm -rf "$out/${t.path}"
+                cp -r ${t.src} "$out/${t.path}"
+              '') subTrees
+            );
     in
     stdenv.mkDerivation {
       pname = "dsh-plugin-${name}";
@@ -82,6 +121,20 @@ let
 
       buildPhase = ''
         runHook preBuild
+        # 子模块工作区(上游 compile 的 build:dsh-std 步):复用同一
+        # config hook 换根换 store 离线安装,再整工作区 build 产出 lib/
+        # (根 tsc 经 node_modules 的 workspace 链接消费这些 lib)。
+        # 注意:hook 会把全局 store-dir 覆写成子模块自己的 store,构建完
+        # 必须恢复根 store —— 否则根级 prune 按子 store 解析,缺包转网络
+        # (沙箱无网,EAI_AGAIN 刷屏即此症状)
+        rootStore="$(pnpm config get store-dir)"
+        ${lib.concatMapStrings (t: lib.optionalString (t.deps != null) ''
+          pnpmDeps="${t.deps}" pnpmRoot="$PWD/${t.path}" pnpmConfigHook
+          pnpm --dir "${t.path}" -r run build
+        '') subTrees}
+        if [ ${toString (lib.length subTrees)} -gt 0 ]; then
+          pnpm config set store-dir "$rootStore"
+        fi
         # tsc 输出到 lib/(package.json exports 指向),源内已有部分 lib 只增不删
         pnpm exec tsc -p tsconfig.json
         if pnpm run --silent verify:build 2>/dev/null; then :; else
@@ -92,9 +145,21 @@ let
 
       installPhase = ''
         runHook preInstall
+        # 子模块的构建工具链(tsdown/typescript)不入运行时产物
+        # (@dsh-std/* 零运行时依赖,留下的 lib/ + 源内数据即全部)
+        ${lib.concatMapStrings (t: ''
+          find "${t.path}" -name node_modules -type d -prune -exec rm -rf {} +
+        '') subTrees}
         # 剪掉 devDependencies(tsc 等),保留运行时闭包;
-        # 整树连 node_modules 打包 → profile symlink 后 import 链可解析
+        # 整树连 node_modules 打包 → profile symlink 后 import 链可解析。
+        # prune 会清 node_modules 整目录再重装,非交互环境须 CI=true
+        # (pnpm 对无 TTY 的确认提示;该键也进不了 pnpm config set)
+        export CI=true
         pnpm prune --prod
+        # pnpm prune 不清 .pnpm/node_modules 的提升别名:被剪包(含 peer
+        # 组合目录,如 react 18/19 混排)留下悬空 symlink,炸 stdenv 的
+        # noBrokenSymlinks 校验 → 只删目标缺失的链接(有效链接不动)
+        find node_modules -xtype l -delete
         cp -r . "$out"
         ${lib.optionalString (hostDsh != null) (linkPeers (e.peers or [ ]))}
         runHook postInstall
@@ -104,6 +169,9 @@ let
         packageName = name;
         dshBundlePatch = e.bundlePatch or null;
         dshFace = e.face or null;
+        # face 树是否带 base agent-presets 行(roster 舞资格;update.py
+        # roster= 尾参物化,收录时探测)
+        dshRoster = e.roster or null;
         dshPresets = e.dshPresets or [ ];
       };
 
@@ -121,6 +189,7 @@ let
           packageName = name;
           dshBundlePatch = e.bundlePatch or null;
           dshFace = e.face or null;
+          dshRoster = e.roster or null;
           dshPresets = e.dshPresets or [ ];
         };
         meta = with lib; {

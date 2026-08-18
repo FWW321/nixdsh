@@ -91,6 +91,43 @@ def prefetch(owner: str, repo: str, rev: str) -> tuple[str, str]:
     return data["storePath"], data["hash"]
 
 
+def parse_gitmodules(src: Path) -> list[tuple[str, str]]:
+    """.gitmodules → [(path, url)];无文件返回空。tarball 不含子模块内容,
+    只含这份清单 —— 物化所需的钉点 SHA 另查 contents API。"""
+    gm = src / ".gitmodules"
+    if not gm.is_file():
+        return []
+    import configparser
+
+    cp = configparser.ConfigParser()
+    cp.read(gm)
+    out = []
+    for section in cp.sections():
+        if not section.startswith("submodule "):
+            continue
+        path = cp.get(section, "path", fallback="")
+        url = cp.get(section, "url", fallback="")
+        if path and url:
+            out.append((path, url))
+    return out
+
+
+def resolve_submodule(
+    owner: str, repo: str, rev: str, path: str, url: str
+) -> dict:
+    """子模块钉点解析:contents API 给 gitlink SHA + 上游仓库坐标。"""
+    info = api(f"repos/{owner}/{repo}/contents/{path}?ref={rev}")
+    if info.get("type") != "submodule":
+        sys.exit(
+            f"  {path}: expected a submodule gitlink at {rev}, "
+            f"got {info.get('type')}"
+        )
+    m = re.match(r"https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if not m:
+        sys.exit(f"  {path}: non-GitHub submodule URL unsupported: {url}")
+    return {"owner": m[1], "repo": m[2], "rev": info["sha"]}
+
+
 def probe_pnpm_hash(src: str) -> str:
     """fetchPnpmDeps hash 发现:fakeHash 构建预期失败,从错误信息取 got:。"""
     lock = json.loads((ROOT / "flake.lock").read_text())
@@ -131,9 +168,14 @@ def main() -> None:
         # face profile;subpath 为 monorepo 子目录
         subpath = ""
         face = ""
+        roster = ""
         for p in parts[1:]:
             if p.startswith("face="):
                 face = p.removeprefix("face=")
+            elif p.startswith("roster="):
+                # roster=(true|false):face 树是否带 base agent-presets 行
+                # (roster 舞资格;收录时探测 bundle patch 的 insert 行)
+                roster = p.removeprefix("roster=")
             elif not subpath:
                 subpath = p
 
@@ -146,6 +188,23 @@ def main() -> None:
         if not pkg_json.is_file():
             sys.exit(f"  no package.json at {pkg_json}")
         manifest = json.loads(pkg_json.read_text())
+
+        # git 子模块(如 dsh-TUI v0.8.1 的 vendor/dsh-std):tarball 只带
+        # .gitmodules 清单。逐个解析钉点 → prefetch → 记录;含独立
+        # pnpm-lock.yaml 的子模块(自带构建工具链)额外探 pnpmDeps hash
+        submodules = []
+        sub_stores: dict[str, str] = {}
+        for path, url in parse_gitmodules(Path(src)):
+            pin = resolve_submodule(owner, repo, rev, path, url)
+            sub_src, sub_hash = prefetch(pin["owner"], pin["repo"], pin["rev"])
+            print(f"  submodule {path}: {pin['owner']}/{pin['repo']}"
+                  f" @ {pin['rev'][:12]}")
+            entry = {"path": path, **pin, "hash": sub_hash}
+            if (Path(sub_src) / "pnpm-lock.yaml").is_file():
+                entry["pnpmHash"] = probe_pnpm_hash(sub_src)
+                print(f"    pnpmDeps: {entry['pnpmHash'][:19]}…")
+            submodules.append(entry)
+            sub_stores[path] = sub_src
 
         # needsBuild 探测:主入口 export target 在 git 源码缺失
         # → 上游提交的 lib 过期/不全,derivation 需构建(tsc)+ 打包运行时 node_modules
@@ -165,7 +224,29 @@ def main() -> None:
             print(
                 f"  main target {main_target} missing in source → build needed"
             )
-            pnpm_hash = probe_pnpm_hash(src)
+            # 根 lockfile 把子模块内的包记作 workspace importer ——
+            # 缺席时 --frozen-lockfile 直接拒绝。探测必须用"主树 + 子模块
+            # 物化"的合成树(与 overlay.nix 的合成源同构),构建同理
+            probe_src = src
+            if submodules:
+                import tempfile
+
+                combined = Path(tempfile.mkdtemp(prefix="dsh-submods-"))
+                subprocess.run(
+                    ["cp", "-r", f"{src}/.", str(combined)], check=True
+                )
+                subprocess.run(
+                    ["chmod", "-R", "u+w", str(combined)], check=True
+                )
+                for path, sub_src in sub_stores.items():
+                    subprocess.run(
+                        ["rm", "-rf", str(combined / path)], check=True
+                    )
+                    subprocess.run(
+                        ["cp", "-r", sub_src, str(combined / path)], check=True
+                    )
+                probe_src = str(combined)
+            pnpm_hash = probe_pnpm_hash(probe_src)
             print(f"  pnpmDeps: {pnpm_hash[:19]}…")
 
         fields = [
@@ -176,6 +257,10 @@ def main() -> None:
             fields.append(("subpath", subpath))
         if face:
             fields.append(("face", face))
+        if roster:
+            fields.append(("roster", roster))
+        if submodules:
+            fields.append(("submodules", json.dumps(submodules)))
         if patch := (manifest.get("dsh", {}).get("bundle", {}).get("patch")):
             fields.append(("bundlePatch", patch))
         # peers 物化:peerDependencies ∪ dependencies(宿主 dsh 安装是它们的
@@ -222,10 +307,17 @@ def main() -> None:
         def nix_val(v):
             if v is True:
                 return "true"
-            if v.startswith("["):
-                # JSON 数组 → Nix 字符串列表(逐元素转义,非字面量直传)
-                items = json.loads(v)
-                return "[ " + " ".join(nix_str(i) for i in items) + " ]"
+            if isinstance(v, list):
+                return "[ " + " ".join(nix_val(i) for i in v) + " ]"
+            if isinstance(v, dict):
+                return (
+                    "{ "
+                    + " ".join(f"{k} = {nix_val(x)};" for k, x in v.items())
+                    + " }"
+                )
+            if v.startswith("[") or v.startswith("{"):
+                # JSON 容器(字符串形态)→ 逐元素递归转义
+                return nix_val(json.loads(v))
             return nix_str(v)
 
         attrs = " ".join(f"{k} = {nix_val(v)};" for k, v in fields)

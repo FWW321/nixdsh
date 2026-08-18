@@ -2,10 +2,10 @@
 # dsh (DeepSeek Harness) — DeepSeek 开源 agent harness CLI
 # 源码:https://github.com/deepseek-ai/deepseek-harness
 #
-# 基座:NixOS/nixpkgs#552467(AlephCasara)的打包,rc.5 源码 + 上游 pnpm-lock
-# (fetchPnpmDeps 依赖解析归上游所有;rc.6 只发 npm tarball 无对应源码 lockfile,
-#  故钉在 rc.5 — 与 PR 同理由)。全套 installCheck 保留:boot web + HTTP 探针、
-# 真 PTY、koffi/sharp 原生模块加载、Landlock 沙箱探针、坏链接/build 路径泄漏扫描。
+# 基座:NixOS/nixpkgs#552467(AlephCasara)的打包,源码 + 上游 pnpm-lock
+# (fetchPnpmDeps 依赖解析归上游所有;跟最新 release tag)。全套 installCheck
+# 保留:boot web + HTTP 探针、真 PTY、koffi/sharp 原生模块加载、Landlock
+# 沙箱探针、坏链接/build 路径泄漏扫描。
 #
 # 注入为 nixpkgs overlay → pkgs.dsh(见 pkgs/default.nix)
 # profile 模型/lib.mkDsh 见同目录 lib/;HM 模块见 hm-module.nix
@@ -29,12 +29,44 @@
 let
   runtimeNode = nodejs-slim_24;
   pnpm = pnpm_11.override { nodejs-slim = runtimeNode; };
+
+  # pnpm pack 的 manifest 依赖键排序(determinism):两处 installPhase
+  # NODE 脚本共用(peer 补链的 materialize 与 CLI pack 安装)。经 env
+  # 传入模块路径,heredoc 保持引用模式(<<'NODE')零 shell 展开风险
+  canonicalizeManifestMjs = builtins.toFile "canonicalize-manifest.mjs" ''
+    import { readFileSync, writeFileSync } from "node:fs";
+
+    const dependencyFields = [
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+      "peerDependenciesMeta",
+    ];
+
+    export const canonicalizeManifest = manifestPath => {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+      for (const field of dependencyFields) {
+        if (manifest[field] === undefined) {
+          continue;
+        }
+
+        manifest[field] = Object.fromEntries(
+          Object.entries(manifest[field]).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        );
+      }
+
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    };
+  '';
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "deepseek-harness";
 
-  # rc.5 is pinned because rc.6 was published without matching public source and lockfile.
-  version = "0-unstable-2026-08-13";
+  version = "0-unstable-2026-08-17";
 
   __structuredAttrs = true;
   strictDeps = true;
@@ -42,15 +74,15 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "deepseek-ai";
     repo = "deepseek-harness";
-    rev = "47f943859bef60e4160492346772ded9b24f765a";
-    hash = "sha256-ZPGCNoPXVjP76Tm/tFPDX2X95cd83M4iHLmVP5dR+Ps=";
+    rev = "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca";
+    hash = "sha256-xPP8FB308n8SD5B65whaErLyaDBbFferoQ9g3H6h2es=";
   };
 
   pnpmDeps = fetchPnpmDeps {
     inherit (finalAttrs) pname version src;
     inherit pnpm;
     fetcherVersion = 4;
-    hash = "sha256-aySHq0ywTMM5q7YuGHZrV3yQE3bwppgGfWH3wRnHCXk=";
+    hash = "sha256-zmlWt5HYvzkCnCDD5X/psgfGPbRAUwO0p4qDtI5+R5M=";
   };
 
   nativeBuildInputs = [
@@ -132,6 +164,7 @@ stdenv.mkDerivation (finalAttrs: {
     # peerDependencies. Derive the required peer closure from upstream manifests
     # and materialize only missing packages through pnpm pack, matching upstream's
     # published payload transformation instead of maintaining a downstream list.
+    CANONICALIZE_MANIFEST="${canonicalizeManifestMjs}" \
     DEPLOY_DIR="$deployDir" PACK_DIR="$packDir" \
       node --input-type=module <<'NODE'
     import {
@@ -140,10 +173,14 @@ stdenv.mkDerivation (finalAttrs: {
       mkdirSync,
       readFileSync,
       rmSync,
-      writeFileSync,
     } from "node:fs";
     import { dirname, join } from "node:path";
+    import { pathToFileURL } from "node:url";
     import { spawnSync } from "node:child_process";
+
+    const { canonicalizeManifest } = await import(
+      pathToFileURL(process.env.CANONICALIZE_MANIFEST)
+    );
 
     const deployDir = process.env.DEPLOY_DIR;
     const packDir = process.env.PACK_DIR;
@@ -195,32 +232,6 @@ stdenv.mkDerivation (finalAttrs: {
       if (result.error !== undefined || result.status !== 0) {
         throw new Error(command + " failed: " + args.join(" "));
       }
-    };
-
-    const dependencyFields = [
-      "dependencies",
-      "devDependencies",
-      "optionalDependencies",
-      "peerDependencies",
-      "peerDependenciesMeta",
-    ];
-
-    const canonicalizeManifest = manifestPath => {
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-
-      for (const field of dependencyFields) {
-        if (manifest[field] === undefined) {
-          continue;
-        }
-
-        manifest[field] = Object.fromEntries(
-          Object.entries(manifest[field]).sort(([a], [b]) =>
-            a < b ? -1 : a > b ? 1 : 0,
-          ),
-        );
-      }
-
-      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     };
 
     const materialize = name => {
@@ -381,34 +392,16 @@ stdenv.mkDerivation (finalAttrs: {
       pnpm --dir apps/cli pack --out "$cliTar"
     tar -xzf "$cliTar" --strip-components=1 -C "$app"
 
+    CANONICALIZE_MANIFEST="${canonicalizeManifestMjs}" \
     APP="$app" ${lib.getExe runtimeNode} --input-type=module <<'NODE'
-    import { readFileSync, writeFileSync } from "node:fs";
     import { join } from "node:path";
+    import { pathToFileURL } from "node:url";
 
-    const dependencyFields = [
-      "dependencies",
-      "devDependencies",
-      "optionalDependencies",
-      "peerDependencies",
-      "peerDependenciesMeta",
-    ];
+    const { canonicalizeManifest } = await import(
+      pathToFileURL(process.env.CANONICALIZE_MANIFEST)
+    );
 
-    const manifestPath = join(process.env.APP, "package.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-
-    for (const field of dependencyFields) {
-      if (manifest[field] === undefined) {
-        continue;
-      }
-
-      manifest[field] = Object.fromEntries(
-        Object.entries(manifest[field]).sort(([a], [b]) =>
-          a < b ? -1 : a > b ? 1 : 0,
-        ),
-      );
-    }
-
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    canonicalizeManifest(join(process.env.APP, "package.json"));
     NODE
 
     rm -f \
@@ -456,7 +449,7 @@ stdenv.mkDerivation (finalAttrs: {
   versionCheckProgramArg = "--version";
 
   preVersionCheck = ''
-    export version=0.1.0-rc.5
+    export version=0.1.0-rc.7
   '';
 
   postInstallCheck = ''
