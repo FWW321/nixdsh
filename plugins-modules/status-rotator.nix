@@ -27,9 +27,11 @@ in
     enable = lib.mkEnableOption "dsh-status-rotator(状态栏轮换文案)";
 
     # 注:该插件运行时配置走其自身 config.json(gen-config.cjs 生成,
-    # Nix 下为只读 symlink,插件回退 example 默认);typed 键仅覆盖 Nix
-    # 能真实落地的部分(enable/profiles)。带 cordis bundle patch 的插件
-    # 可完整 typed 化(见 config 块注释)。
+    # Nix 下为只读 symlink,插件回退 example 默认;v0.3.0+ 在设置页
+    # 可视化编辑,PUT 原子写回会在只读 symlink 上失败 —— 改文案仍走
+    # 覆盖 config.json 路径)。typed 键仅覆盖 Nix 能真实落地的部分
+    # (enable/profiles)。带行级配置面的插件可完整 typed 化(见
+    # config 块注释)。
     profiles = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "web" ];
@@ -39,10 +41,10 @@ in
 
   config = lib.mkIf cfg.enable {
     # 回填通用层:名字 = registry packageName → source 免声明。
-    # 注意:status-rotator 是纯 client-inject 插件(无 dsh.bundle.patch,非
-    # cordis layer),其运行时配置走插件自己的 config.json 机制 —— 因此
-    # 这里不发 patch 行(发了也是 no-op 警告)。带 bundle patch 的插件
-    # (dsh-sysmon 等)的 typed module 应在此渲染:
+    # status-rotator v0.3.0 起自带 cordis bundle patch(一行 insert),
+    # 通用层从 passthru.dshBundlePatch 自动发现并物化;typed 侧无行级
+    # 配置面(运行时配置走插件自己的 config.json 机制)。有行级配置面
+    # 的插件(dsh-sysmon 等)的 typed module 应在此渲染:
     #   patches = [ { id = "..."; config = { inherit (cfg) intervalMs; }; } ];
     programs.dsh.plugins.dsh-status-rotator = {
       enable = true;
