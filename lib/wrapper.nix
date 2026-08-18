@@ -2,7 +2,13 @@
 #   upstreamSubcommands  上游子命令集(bin.js 的 program.command 注册自动提取)
 #   renderCompletion     bash 补全(静态名单,零运行时开销)
 #   renderWrapper        主 wrapper(settings yq-merge/secret 注入/子命令分发)
-{ lib, renderSettings, secretEnv, applyPlugins }:
+#
+# renderWrapper 接受调用方的 applyPlugins 结果(`applied`)—— 求值单次
+# 原则:hm-module/mkDsh 已算过 applied,这里不再内部重算(此前每次
+# wrapper 渲染重复跑两遍 applyPlugins)。secret 占位符清单消费
+# applied.mcpSecretRefs(结构化单一事实源;此前对行文本做正则回扫,
+# 同行多 secret 时贪婪匹配只收一个,漏注的占位符以字面量进 MCP config)。
+{ lib, renderSettings, secretEnv, secretPlaceholder }:
 
 let
   inherit (lib)
@@ -10,6 +16,7 @@ let
     escapeShellArg
     filter
     getExe
+    map
     mapAttrsToList
     optionalString
     ;
@@ -89,6 +96,7 @@ let
     {
       cfg,
       pkgs,
+      applied,
       name ? "dsh",
       fixedProfile ? null,
       subcommands ? [ ],
@@ -98,9 +106,7 @@ let
       # webSearch/llmDeepseek 不随 inherit:renderSettings 缺省 null,
       # stub cfg(无该键)与真实 cfg(默认 null)等价;显式 attrs 时模块
       # 系统保证键存在,inherit (cfg) 反而会炸 stub 调用方
-      # 默认 preset 协调参数来自 applyPlugins(per-face 生效时全局
-      # 不进 settings);stub cfg 或缺省键时 or 回落
-      rsArgs = {
+      rs = renderSettings {
         inherit (cfg) settings telemetry providers defaultModel;
         webSearch = cfg.webSearch or null;
         webSearchProviders = cfg.webSearchProviders or { };
@@ -108,10 +114,7 @@ let
         webFetch = cfg.webFetch or null;
         webFetchProviders = cfg.webFetchProviders or { };
       };
-      _applied = applyPlugins { inherit cfg pkgs; };
-      settingsJSON =
-        if renderSettings rsArgs == { } then null
-        else builtins.toJSON (renderSettings rsArgs);
+      settingsJSON = if rs == { } then null else builtins.toJSON rs;
       settingsPrelude = optionalString (settingsJSON != null) ''
         dsh_home="''${DSH_HOME:-$HOME/.dsh}"
 
@@ -157,17 +160,11 @@ let
       # 轮换安全(secret 文件更新即生效);改动物化副本 patch 文件(用户
       # 目录,可 0600),store 工件永不含密钥。secret 文件缺失 → fail-loud
       # 退出,不静默带占位符启动。
-      # 占位符清单 = mcpPatches 渲染行文本回收(单一事实源,防与渲染链
-      # 漂移;insert 包裹后占位符在嵌套 config 里,扫整行 JSON)
+      # 占位符清单 = mcpSecretRefs 结构化推导(secretPlaceholder 单源,
+      # 与行渲染共用同一函数,不存在回扫漂移)
       secretPrelude =
         let
-          mcpRows = (applyPlugins { inherit cfg pkgs; }).mcpPatches;
-          placeholders = lib.flatten
-            (map
-              (row:
-                let m = builtins.match ".*(@dsh-secret:[^\"]*@).*" (builtins.toJSON row);
-                in if m == null then [ ] else m)
-              mcpRows);
+          placeholders = map secretPlaceholder (applied.mcpSecretRefs or [ ]);
         in
         optionalString (placeholders != [ ]) ''
           _secrets=(
@@ -253,9 +250,9 @@ let
       ${faceDispatch}
       ${profilePrelude}
       # dsh-tui 启动期对每个版本错位的 peer 打一条 upstream drift 警告
-      # (apply() 无条件 console.warn,无开关;当前 profile 钉 rc.5、tui
-      # validated rc.6 → 23 行/次纯噪音,README 已注记为无害)。wrapper
-      # 层滤掉该模式;要看原始警告直跑 ${cfg.package} 或 bin/dsh(绕过
+      # (apply() 无条件 console.warn,无开关)。宿主与 tui 同批升级时零行;
+      # 两者错位的过渡窗(tui 先行/滞后 bump)会出现整屏噪音,wrapper 层
+      # 滤掉该模式兜底。要看原始警告直跑 ${cfg.package} 或 bin/dsh(绕过
       # wrapper)。grep 只丢匹配行,其余 stderr 原样透传(line-buffered)。
       exec ${getExe cfg.package} ${argsStr} "$@" \
         2> >(${pkgs.gnugrep}/bin/grep --line-buffered -v '^\[dsh-tui\] upstream drift:' >&2)

@@ -82,6 +82,25 @@ in
       refs = (applyWith {
         mcpServers = { gh.env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = "/run/secrets/fake-gh"; };
       }).mcpSecretRefs;
+      # 同一 server 多 secret 的 refs 结构化收集(A5 回归:文本回扫时代
+      # 贪婪正则每行只收一个)
+      multiRefs = (applyWith {
+        mcpServers.gh = {
+          transport = "stdio";
+          command = "gh";
+          env = {
+            GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = "/run/secrets/fake-gh";
+            OTHER_TOKEN.secretFile = "/run/secrets/fake-other";
+          };
+          args = [ ]; cwd = null; url = null; headers = { };
+          toolCallTimeoutMs = null; failOnStartupError = false; settings = { };
+        };
+      }).mcpSecretRefs;
+      # 名校验负例(B12:上游 SERVER_NAME_PATTERN 前移到 eval 期)
+      badName = builtins.tryEval (builtins.deepSeq
+        (applyWith {
+          mcpServers."bad name!".command = "x";
+        }).mcpPatches null);
       assert' = c: m: pkgs.lib.assertMsg c m;
     in
     pkgs.runCommand "dsh-mcp-render-check" { } (builtins.seq ([
@@ -105,53 +124,68 @@ in
       (assert' (rm.headers.X-Plain == "literal") "dsh-mcp-render: literal header must stay literal")
       (assert' (gh.env.GITHUB_PERSONAL_ACCESS_TOKEN == "@dsh-secret:/run/secrets/fake-gh@") "dsh-mcp-render: secretFile env must render bare placeholder")
       (assert' (builtins.length refs == 1 && builtins.head refs == "/run/secrets/fake-gh") "dsh-mcp-render: mcpSecretRefs must dedupe and collect")
+      (assert' (builtins.length multiRefs == 2)
+        "dsh-mcp-render: two secretFiles on one server must BOTH land in the structured refs list")
+      (assert' (!badName.success)
+        "dsh-mcp-render: server names violating ^[A-Za-z0-9_-]{1,32}$ must throw at eval time (upstream SERVER_NAME_PATTERN hoisted)")
     ]) "touch $out");
 
   # secret 注入行为级验证:真跑 wrapper 启动块,对物化 patch 注入真值,
-  # 验证 0600/占位符清零(build 沙箱 /tmp 可写,fixed home 固定路径)
+  # 验证 0600/占位符清零(build 沙箱 /tmp 可写,fixed home 固定路径)。
+  # 同一 server 两个 secret(A5 回归:文本回扫时代第二个占位符漏注,
+  # 字面 @dsh-secret:… 进 MCP config)
   dsh-mcp-secret-inject =
     let
       home = "/tmp/dsh-inject-check-home";
       secretFile = "/tmp/dsh-inject-check-secret";
-      wrapper = dshLib.renderWrapper {
-        cfg = mkFakeCfg {
-          dshHome = home;
-          defaultProfile = "default";
-          mcpServers = {
-            gh = {
-              transport = "stdio";
-              command = "true";
-              env.GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = secretFile;
-              args = [ ];
-              cwd = null;
-              url = null;
-              headers = { };
-              toolCallTimeoutMs = null;
-              failOnStartupError = false;
-              settings = { };
+      secretFile2 = "/tmp/dsh-inject-check-secret2";
+      fakeCfg = mkFakeCfg {
+        dshHome = home;
+        defaultProfile = "default";
+        mcpServers = {
+          gh = {
+            transport = "stdio";
+            command = "true";
+            env = {
+              GITHUB_PERSONAL_ACCESS_TOKEN.secretFile = secretFile;
+              SECOND_TOKEN.secretFile = secretFile2;
             };
+            args = [ ];
+            cwd = null;
+            url = null;
+            headers = { };
+            toolCallTimeoutMs = null;
+            failOnStartupError = false;
+            settings = { };
           };
-          profiles = { default = { plugins = [ ]; userPatches = [ ]; }; };
-          plugins = { };
-          inBoxPlugins = { };
         };
-        inherit pkgs;
+        profiles = { default = { plugins = [ ]; userPatches = [ ]; }; };
+        plugins = { };
+        inBoxPlugins = { };
       };
-      # 模拟 activation 产物:bundle patch 含占位符
+      wrapper = dshLib.renderWrapper {
+        cfg = fakeCfg;
+        inherit pkgs;
+        applied = dshLib.applyPlugins { cfg = fakeCfg; inherit pkgs; };
+      };
+      # 模拟 activation 产物:bundle patch 含两个占位符
       placeholderPatch = pkgs.writeText "cordis.patch.yml" ''
         - id: mcp-gh
           name: '@deepseek-ai/dsh-mcp-client'
           config:
             env:
               GITHUB_PERSONAL_ACCESS_TOKEN: '@dsh-secret:${secretFile}@'
+              SECOND_TOKEN: '@dsh-secret:${secretFile2}@'
       '';
     in
     pkgs.runCommand "dsh-mcp-secret-inject-check" { } ''
       install -D -m 0644 ${placeholderPatch} ${home}/profiles/default/cordis.patch.yml
       printf 'REALTOKEN123\n' > ${secretFile}
+      printf 'REALSECOND456\n' > ${secretFile2}
       ${wrapper}/bin/dsh >/dev/null 2>&1 || true
       pf=${home}/profiles/default/cordis.patch.yml
-      grep -q REALTOKEN123 "$pf" || { echo "secret not injected"; cat "$pf"; exit 1; }
+      grep -q REALTOKEN123 "$pf" || { echo "first secret not injected"; cat "$pf"; exit 1; }
+      grep -q REALSECOND456 "$pf" || { echo "second secret not injected (A5: placeholder scan must be structural)"; cat "$pf"; exit 1; }
       ! grep -q '@dsh-secret:' "$pf" || { echo "placeholder survived"; exit 1; }
       [ "$(stat -c %a "$pf")" = "600" ] || { echo "mode not 0600: $(stat -c %a "$pf")"; exit 1; }
       touch $out

@@ -311,12 +311,13 @@ in
     ]) "touch $out");
 
   # preset 重放 drift 拦截:真实 shipped standard + 真实能力行组过
-  # buildPreset,断言 tool-web fetch 保险丝真的写进去了。上游 preset
-  # 行改名/挪键/删行 → 重放静默变 no-op → 此 check 炸(fail-loud),
-  # 而非运行时静默失效
+  # buildPreset,断言 tool-web fetch 保险丝 + 超时键真的写进去了。
+  # 上游 preset 行改名/挪键/删行 → 重放静默变 no-op → 此 check 炸
+  # (fail-loud),而非运行时静默失效
   dsh-preset-replay-drift =
     let
-      # 与生产同构的能力行组:选中 fetch 后端 → wfRows 含 fetch:true 行
+      # 与生产同构的能力行组:选中 fetch 后端 → webSeamRows 含
+      # {fetch:true, searchTimeoutMs:60000} 的 tool-web 重述行
       applied = applyWith {
         webFetch = "probe";
         webFetchProviders.probe.row.name = "@example/dsh-web-fetch-probe";
@@ -324,15 +325,20 @@ in
       replayed = dshLib.buildPreset {
         inherit pkgs;
         source = dshLib.shippedPreset pkgs "standard";
-        rows = applied.wfRows;
+        rows = applied.webSeamRows;
       };
       fetchVal = builtins.readFile (pkgs.runCommand "preset-drift-probe" { } ''
         ${pkgs.yq-go}/bin/yq '.[] | select(.id == "tool-web") | .config.fetch' ${replayed}/agent.cordis.yml > $out
       '');
+      timeoutVal = builtins.readFile (pkgs.runCommand "preset-drift-timeout-probe" { } ''
+        ${pkgs.yq-go}/bin/yq '.[] | select(.id == "tool-web") | .config.searchTimeoutMs' ${replayed}/agent.cordis.yml > $out
+      '');
     in
     pkgs.runCommand "dsh-preset-replay-drift-check" { } (builtins.deepSeq ([
       (pkgs.lib.assertMsg (lib.removeSuffix "\n" fetchVal == "true")
-        "preset-replay-drift: shipped standard no longer takes the tool-web fetch rewrite (upstream row shape changed — update the replay row ids in lib/apply.nix)")
+        "preset-replay-drift: shipped standard no longer takes the tool-web fetch rewrite (upstream row shape changed — update the replay row ids in lib/webseam.nix)")
+      (pkgs.lib.assertMsg (lib.removeSuffix "\n" timeoutVal == "60000")
+        "preset-replay-drift: the replayed tool-web row must carry searchTimeoutMs: 60000 (A2 — the whole-row restatement feeds the farm replay)")
     ]) "touch $out");
 
   # preset 出处总账:三态组装 + fork 标注 + 命令渲染(命令本体真跑:

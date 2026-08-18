@@ -7,7 +7,8 @@
 let
   dshLib = import ./lib { inherit lib; };
   cfg = config.programs.dsh;
-  wrapper = dshLib.renderWrapper { inherit cfg pkgs; name = cfg.binName; };
+  applied = dshLib.applyPlugins { inherit cfg pkgs; };
+  wrapper = dshLib.renderWrapper { inherit cfg pkgs applied; name = cfg.binName; };
 in
 {
   imports = [ ./modules/options.nix ];

@@ -4,6 +4,9 @@
 
 let
   inherit (fx) applyWith mkFakeCfg;
+  # wrapper 渲染的 applied 单算助手(求值单次原则;fake cfg 各键
+  # or-守卫,applyPlugins 无 MCP 声明时零副作用)
+  wrapperApplied = cfg: dshLib.applyPlugins { inherit cfg pkgs; };
 in
 {
   dsh-profile-structure = pkgs.runCommand "dsh-profile-structure-check"
@@ -106,15 +109,19 @@ in
       };
       assert' = cond: msg: pkgs.lib.assertMsg cond msg;
       # dsh <profile> 子命令分发:主 wrapper 脚本内容(build 期 grep);
-      # web 排除(上游原生 web 子命令已等价 boot profiles.web)
+      # web 排除(上游原生 web 子命令已等价 boot profiles.web)。
+      # applied 显式单算一次传给 renderWrapper(求值单次原则,与
+      # hm-module/mkDsh 同构)
       dispatchWrapper = dshLib.renderWrapper {
         cfg = mkFakeCfg { };
         inherit pkgs;
+        applied = wrapperApplied (mkFakeCfg { });
         subcommands = [ "tui" "web" ];
       };
       plainWrapper = dshLib.renderWrapper {
         cfg = mkFakeCfg { };
         inherit pkgs;
+        applied = wrapperApplied (mkFakeCfg { });
       };
       # bash 补全:分发名单 + 上游命令都在 $1 词表,--profile 值含 web
       completionText = dshLib.renderCompletion {
@@ -130,6 +137,7 @@ in
           (dshLib.renderWrapper {
             cfg = mkFakeCfg { };
             inherit pkgs;
+            applied = wrapperApplied (mkFakeCfg { });
             subcommands = [ "plugin" ];
           })
           null);
@@ -175,6 +183,7 @@ in
       wrapper = dshLib.renderWrapper {
         cfg = mkFakeCfg { package = fakeDsh; };
         inherit pkgs;
+        applied = wrapperApplied (mkFakeCfg { package = fakeDsh; });
       };
     in
     pkgs.runCommand "dsh-wrapper-drift-filter-check" { } ''
@@ -207,4 +216,51 @@ in
       (pkgs.lib.assertMsg (asSet.hmr.disabled == false) "inBoxPlugins: enable=true must set disabled=false")
        (pkgs.lib.assertMsg (asSet.timer.config.timeoutMs == 30000) "inBoxPlugins: config must render")
      ]) "touch $out");
+
+  # patch 行 YAML 渲染层(lib/patch.nix):块式 emitter 的标量域
+  # (bool 显式 —— Nix toString true = "1" 的 shell 强转不可漏)、
+  # 嵌套/内联空集合、怪键引号、rawYaml 标签原样落盘(!!js 与上游
+  # patch 文件同构;yq 走选择路径会把自定义标签归一掉 → raw 断言
+  # 用文本 grep,yq 只测普通值)
+  dsh-patch-yaml =
+    let
+      yml = dshLib.patchesToYaml [
+        { id = "sandbox-policy"; config = { mode = "workspace-write"; workspaceRoot = dshLib.rawYaml "!!js process.cwd()"; }; }
+        { id = "tool-web"; config = { fetch = true; disabled-flag = false; searchTimeoutMs = 60000; }; }
+        { id = "empty-collections"; config = { list = [ ]; attrs = { }; nested.deep = [ 1 "two" ]; }; }
+        { id = "quoted"; config."odd key: v" = "has: colon and more"; }
+        { id = "plain-disable"; disabled = true; }
+      ];
+      file = pkgs.writeText "patch-yaml.yml" yml;
+      probe = expr: pkgs.runCommand "patch-yaml-probe" { } ''
+        ${pkgs.yq-go}/bin/yq '${expr}' ${file} > $out
+      '';
+      readProbe = expr:
+        pkgs.lib.removeSuffix "\n" (builtins.readFile (probe expr));
+    in
+    pkgs.runCommand "dsh-patch-yaml-check" { } (builtins.deepSeq ([
+      (pkgs.lib.assertMsg (readProbe ''.[1].config.fetch'' == "true")
+        "patch-yaml: booleans must render as YAML true (Nix toString would emit 1)")
+      (pkgs.lib.assertMsg (readProbe ''.[1].config."disabled-flag"'' == "false")
+        "patch-yaml: false must render as false (Nix toString would emit the empty string)")
+      (pkgs.lib.assertMsg (readProbe ''.[1].config.searchTimeoutMs'' == "60000")
+        "patch-yaml: integers must render unquoted")
+      (pkgs.lib.assertMsg (readProbe ''.[2].config.list'' == "[]")
+        "patch-yaml: empty lists must inline as []")
+      (pkgs.lib.assertMsg (readProbe ''.[2].config.attrs'' == "{}")
+        "patch-yaml: empty attrs must inline as {}")
+      (pkgs.lib.assertMsg (readProbe ''.[2].config.nested.deep[1]'' == "two")
+        "patch-yaml: nested block sequences must round-trip")
+      (pkgs.lib.assertMsg (readProbe ''.[3].config["odd key: v"]'' == "has: colon and more")
+        "patch-yaml: keys/values with YAML special characters must be quoted and survive")
+      (pkgs.lib.assertMsg (builtins.match ".*(workspaceRoot: !!js process\.cwd\(\)).*" yml != null)
+        "patch-yaml: rawYaml values must land verbatim in the file (the !!js tag rides the same YAML schema the upstream patch files use)")
+      (pkgs.lib.assertMsg (readProbe ''.[4].disabled'' == "true")
+        "patch-yaml: top-level disable rows must survive")
+    ]) ''
+      # yq 整文件解析不炸(健康性:emitter 产物是合法 YAML)
+      ${pkgs.yq-go}/bin/yq 'length' ${file} > "$TMPDIR/len.txt"
+      test "$(cat "$TMPDIR/len.txt")" = "5" || { echo "document must parse to 5 rows"; exit 1; }
+      touch $out
+    '');
 }

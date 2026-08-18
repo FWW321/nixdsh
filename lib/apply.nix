@@ -1,366 +1,107 @@
-# typed 插件层 → 各 profile 的增量渲染(nixvim 式):
+# typed 插件层 → 各 profile 的增量渲染(nixvim 式组合器):
 #   plugins.<name>.enable → 源(source 或 pkgs.dshPlugins.<name>)追加进目标
 #   profile 的 plugins;settings/patches 渲染为 patch 行追加进其 userPatches
-# 目标:plugin.profiles 非空取其与已声明 profile 的交集;空 = 所有 profile
-# patchId 语义:settings 非空时才要求;行 = { id; config = settings; }
 #
-# 同时承载:face 推导与自动 profile、_usageAssert(typed×inBox 冲突拦截)、
-# in-box 行、MCP insert 行、webSearch/webFetch 缝行组(disable/insert/选择器)
-{ lib, inBoxFaces, renderSecretAttrs, secretEnvName, validatePresets, buildPresetFarm, shippedPresetNames }:
+# 各域内聚在独立模块(高内聚低耦合,单向依赖):
+#   ./registry.nix     源解析与元数据(lookup/sourceOf/faceOfSource)
+#   ./faces.nix        face 推导/自动 profile/per-face 值表/roster 资格
+#   ./webseam.nix      web 缝行组(search+fetch 单 owner,全键重述)
+#   ./llmseam.nix      llm-deepseek/llm-pi-ai 三态行组
+#   ./permission.nix   权限三行(presets 整表 + workspaceRoot raw 重述)
+#   ./mcprows.nix      MCP insert 行 + secret refs + 名校验
+#   ./subagents.nix    subagent 委托实例行
+#   ./discovery.nix    插件托管 preset 自动发现
+#   ./roster.nix       defaultPreset 枚举校验 + 两行舞 + preset farm
+# 本文件只做装配:per-插件 contributions、in-box 行、行序组合、
+# 跨域断言(表驱动)。patchId 语义:settings 非空时才要求;
+# 行 = { id; config = settings; }。
+{ lib
+, validatePresets
+, shippedPresetNames
+, registry
+, faces
+, webseam
+, llmseam
+, permission
+, mcprows
+, subagents
+, discovery
+, roster
+}:
 
 let
   inherit (lib)
-    any
     attrNames
-    attrValues
     concatMap
-    concatStringsSep
     elem
     filter
+    filterAttrs
+    findFirst
     listToAttrs
-    mapAttrs
     mapAttrsToList
     nameValuePair
-    optionalAttrs
+    optional
     ;
 
   applyPlugins =
     { cfg, pkgs }:
     let
-      enabled = filter (p: p.enable) (attrValues cfg.plugins);
-      # registry 尾名反查:键名 "dsh-tui" → "@deepseek-harness-tui/dsh-tui"
-      # (nixvim 式零 source)。attr 名 <scope>/<pkg>,pkg == <键名> 或
-      # "dsh-<键名>" 双形态;唯一匹配取之,空 = null(调用方决定报错语义),
-      # 多匹配 throw 列候选(须显式 source)
-      registryLookup = name:
-        let
-          table = pkgs.dshPlugins or { };
-          tailOf = k: lib.last (lib.splitString "/" k);
-          candidates = lib.filterAttrs
-            (k: _: tailOf k == name || tailOf k == "dsh-${name}")
-            table;
-          ns = attrNames candidates;
-        in
-        if ns == [ ] then null
-        else if builtins.length ns == 1 then table.${builtins.head ns}
-        else throw "programs.dsh.plugins.${name}: registry tail-name lookup is ambiguous (${concatStringsSep ", " ns}); set source explicitly";
-      # 名字→源:缺省 registry(不在 registry 且未显式给 source 时,mkPlugin
-      # 端 passthru 缺 packageName 会 throw —— 提前给友好错误)。
-      # face 插件跳过分发:源取 p.source / in-box 键名映射(headless →
-      # @deepseek-ai/dsh-headless)/ registry 尾名反查
-      faceSourceOf = name: p:
-        if p.source != null then p.source
-        else if inBoxFaces ? "@deepseek-ai/dsh-${name}" then "@deepseek-ai/dsh-${name}"
-        else if registryLookup name != null then registryLookup name
-        else throw "programs.dsh.plugins.${name}: face plugin requires a source (registry entry, in-box bundle, or explicit source)";
-      sourceOf = name: p:
-        if p.source != null then p.source
-        else if pkgs ? dshPlugins && pkgs.dshPlugins ? ${name} then pkgs.dshPlugins.${name}
-        else if registryLookup name != null then registryLookup name
-        else throw "programs.dsh.plugins.${name}: no source given and '${name}' not in pkgs.dshPlugins (add it to plugins/names.txt and run the updater, or set source)";
-      # 交互面插件 → 自动 profile(base + 本源)。face 插件互斥不参与分发
-      # (进其他树 = duplicate entry / TTY 致死,均实测),功能插件分发到
-      # 所有 face(profiles = [] 缺省语义含自动生成的 face)。
-      # face 推导(源解析感知):显式 plugins.<name>.face > source 的
-      # passthru.dshFace(registry 收录时人审)/ inBoxFaces(in-box 表) >
-      # 零 source 时先解析源(registry 反查 derivation 同样带 dshFace)再读。
-      # 无法纯自动判定互斥(id 冲突之外还有 TTY 等运行期约束,eval 期
-      # 不可见),故判定下沉为插件元数据 —— 用户侧只需 enable。
-      # face 名约束 kebab-case:它被拼进文件路径($DSH_HOME/profiles/<face>)
-      # 与子命令名(dsh <face>),同上游 settingsNamespace 的模式
-      validFace = f:
-        builtins.match "[a-z][a-z0-9]*(-[a-z0-9]+)*" f != null;
-      dshFaceOf = s:
-        if lib.isDerivation s then (s.passthru or { }).dshFace or null
-        else if builtins.isString s && inBoxFaces ? ${s} then inBoxFaces.${s}
-        else null;
-      deriveFace = name: p:
-        if p.face != null then p.face
-        else if p.source != null then dshFaceOf p.source
-        else
-          # 零 source:in-box 键名反查 > registry 反查(两者都返回源,读元数据)
-          if inBoxFaces ? "@deepseek-ai/dsh-${name}" then inBoxFaces."@deepseek-ai/dsh-${name}"
-          else if registryLookup name != null then dshFaceOf (registryLookup name)
-          else null;
-      # 最终 face 名:null = 非交互面;false = 显式压制(registry 标记的
-      # face 当功能插件用)→ 也归 null;true = 从 attr 键派生(剥一次
-      # "dsh-" 前缀,免 `dsh dsh-tui` 冗余子命令 —— cargo cargo-xx 惯例;
-      # 字符串 face 与 registry 元数据不动:前者尊重显式,后者收录时
-      # 已是人审终名);字符串 = 具体名。faceOf 之后只剩 null|true|str
-      faceOf = name: p:
-        let f = deriveFace name p; in
-        if f == false then null else f;
-      facePlugins =
-        let
-          enabled = lib.filterAttrs (name: p: p.enable && faceOf name p != null) cfg.plugins;
-          faceName = name: p:
-            let f = faceOf name p; in
-            if f == true then lib.removePrefix "dsh-" name else f;
-          faceNames = lib.attrValues (lib.mapAttrs faceName enabled);
-          _dupAssert =
-            if builtins.length faceNames != builtins.length (lib.unique faceNames) then
-              throw "programs.dsh.plugins: duplicate face names (${concatStringsSep ", " faceNames})"
-            else if any (f: !validFace f) faceNames then
-              throw "programs.dsh.plugins: face names must be kebab-case ([a-z0-9-], got: ${concatStringsSep ", " faceNames}) — face becomes a profile directory and the dsh <face> subcommand name"
-            else null;
-           # 依赖冲突:skills/presets 的发现插件在 base 树默认启用,显式
-           # disable 会让物化文件无人消费 —— 静默失效比报错更糟,eval 期
-           # fail-loud。(MCP 插件随 insert 行自带,无此冲突;presets 的
-           # roster 行只在 tui/web 树存在,headless 本就无 preset 语义,
-           # 属上游 per-face 行为而非冲突)
-           # 三态 typed 选项 × inBoxPlugins 同组 id 显式对着干 → 同理
-           # fail-loud(typed 层与用户层会产出语义冲突的行组)
-           _usageAssert =
-             let
-               inbox = id: (cfg.inBoxPlugins or { }).${id} or { enable = null; };
-               # 中间绑定而非 `inbox "x".enable` 直连:避免选择器解析歧义
-               skillProvider = inbox "skill-filesystem";
-               presetRoster = inbox "agent-presets";
-                wsNull = (cfg.webSearch or null) == null;
-                dshNull = (cfg.llmDeepseek or null) == null;
-                piAiNull = (cfg.providers or { }) == null;
-                wsProviders = cfg.webSearchProviders or { };
-                # 选择器形态:webSearch 非 null → id 必须在声明表 ∪ base
-                # 自带集;非 base id 必须已声明(包源/参数都在声明条目)
-                wsKnown =
-                  [ "deepseek-official" ] ++ (attrNames wsProviders);
-                wsUnknown = !wsNull && !builtins.elem cfg.webSearch wsKnown;
-                wsOrphanProviders = wsNull && wsProviders != { };
-                # typed 启用(非 null)但 inBoxPlugins 显式禁同组行
-                wsClash =
-                 !wsNull && (inbox "web").enable == false
-                 || !wsNull && (inbox "web-search-deepseek").enable == false
-                 || !wsNull && (inbox "tool-web").enable == false
-                 || !wsNull && (inbox "web-search-exa").enable == false;
-               dshClash = !dshNull && (inbox "llm-deepseek").enable == false;
-               piAiClash = piAiNull && (inbox "llm-pi-ai").enable == false;
-               # typed 禁用(null)但配置仍指向它 —— 意图自相矛盾。
-               # 注意:defaultModel.provider 无法 eval 期判归属(pi-ai
-               # catalog 路由名与 llm-deepseek id "deepseek-official"
-               # 无先验区分,不猜)—— 只查可判定的 settings 声明;
-               # 唯一可靠例外是 deepseek-official(llm-deepseek 固定 id)
-               piAiOrphan = piAiNull && (cfg.settings or { }) ? "llm-pi-ai";
-               dshOrphan = dshNull && (cfg.defaultModel or null) != null
-                 && cfg.defaultModel.provider == "deepseek-official";
-                # fetch 缝(镜像 ws 组):无 base 自带集,选中必在声明表
-                wfNull = (cfg.webFetch or null) == null;
-                wfProviders = cfg.webFetchProviders or { };
-                wfUnknown = !wfNull && !builtins.elem cfg.webFetch (attrNames wfProviders);
-                wfOrphanProviders = wfNull && wfProviders != { };
-                wfClash = !wfNull && (inbox "tool-web").enable == false;
-             in
-             if (cfg.skills or { }) != { } && skillProvider.enable == false then
-               throw "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider"
-             else if (cfg.presets or { }) != { } && presetRoster.enable == false then
-               throw "programs.dsh: presets are declared but inBoxPlugins.agent-presets.enable = false — the preset roster is disabled; remove the presets or re-enable the roster"
-              else if wsClash then
-                throw "programs.dsh: webSearch is set but inBoxPlugins disables one of web/web-search-deepseek/web-search-exa/tool-web — use webSearch alone (null disables the capability rows)"
-              else if wsUnknown then
-                throw "programs.dsh: webSearch = \"${cfg.webSearch}\" is not a declared webSearchProviders entry nor \"deepseek-official\" — declare the backend in webSearchProviders or select a known id"
-              else if wsOrphanProviders then
-                throw "programs.dsh: webSearchProviders is non-empty but webSearch = null (capability disabled) — declared backends would never run; set webSearch to a declared id or clear the table"
-              else if dshClash then
-                throw "programs.dsh: llmDeepseek is set but inBoxPlugins.\"llm-deepseek\".enable = false — use llmDeepseek alone (null disables the row)"
-              else if piAiClash then
-                throw "programs.dsh: providers = null but inBoxPlugins.\"llm-pi-ai\".enable = false is redundant — providers = null already disables the row"
-              else if piAiOrphan then
-                throw "programs.dsh: providers = null but settings.\"llm-pi-ai\" is declared (or defaultModel routes through pi-ai) — a disabled adapter cannot consume them; set providers = {} or drop the declarations"
-              else if dshOrphan then
-                throw "programs.dsh: llmDeepseek = null but defaultModel.provider = \"deepseek-official\" — the default route points at a disabled adapter; enable llmDeepseek or re-route defaultModel"
-              else if wfClash then
-                throw "programs.dsh: webFetch is set but inBoxPlugins disables tool-web — the fetch tool row must stay enabled (webFetch renders its fetch: true restatement)"
-              else if wfUnknown then
-                throw "programs.dsh: webFetch = \"${cfg.webFetch}\" is not a declared webFetchProviders entry — the fetch seam has no base-shipped backend; declare the backend first"
-              else if wfOrphanProviders then
-                throw "programs.dsh: webFetchProviders is non-empty but webFetch = null (capability disabled) — declared backends would never run; set webFetch to a declared id or clear the table"
-              else null;
-           gen = lib.mapAttrs'
-             (name: p:
-               let fname = faceName name p; in
-               lib.nameValuePair fname (
-                 if p.profiles != [ ] then
-                   throw "programs.dsh.plugins.${name}: face plugin cannot also list target profiles (faces are mutually exclusive trees)"
-                 else if builtins.elem fname (attrNames cfg.profiles) then
-                   throw "programs.dsh: face '${fname}' conflicts with explicitly declared profiles.${fname}"
-                 else {
-                   plugins = [ "@deepseek-ai/dsh-base" (faceSourceOf name p) ];
-                   userPatchesFile = null;
-                   userPatches = [ ];
-                 }
-               ))
-             enabled;
-        in
-        builtins.seq _dupAssert (builtins.seq _usageAssert gen);
-      # ── 强一致性:face 树独占插件通道 ──────────────────────────────
-      # 手写 profile 嵌 face bundle(交互插件)→ throw。软一致性的三个
-      # 漏洞(face=false 压制/face 改名/手写树绕开推导)全部源于双通道
-      # 都能建交互树;收口后 per-插件选项(defaultPreset)恒有锚,face
-      # 改名自动跟随,树生命周期严格绑定插件。
-      # 检测:in-box 字符串命中 inBoxFaces(web-app/headless)/ derivation
-      # 源带 passthru.dshFace(registry 收录时人审)。路径源无元数据,
-      # 不可检 —— 文档纪律:交互 bundle 走插件通道。
-      # 手写 profiles 的存在本身合法(非交互命名组合:base+功能插件+
-      # patches);userPatchesFile 是全权委托,检测不到,同属文档纪律。
-      _faceExclusivityAssert =
-        let
-          isFaceSource = s:
-            builtins.isString s && inBoxFaces ? ${s}
-            || lib.isDerivation s && (s.passthru or { }).dshFace or null != null;
-          offenders =
-            concatMap
-              (pname:
-                let p = (cfg.profiles or { }).${pname}; in
-                map
-                  (s: { profile = pname; source = s; })
-                  (filter isFaceSource (p.plugins or [ ])))
-              (attrNames (cfg.profiles or { }));
-          fmt = o: "${o.profile} ← ${if builtins.isString o.source then o.source else toString o.source}";
-        in
-        if offenders != [ ] then
-          throw "programs.dsh: face bundles in hand-written profiles (${concatStringsSep "; " (map fmt offenders)}) — interactive trees come exclusively from the plugin channel (plugins.<name>.enable auto-generates the face profile); hand-written profiles are for non-interactive named compositions"
-        else null;
-      allProfileNames = (attrNames cfg.profiles) ++ (attrNames facePlugins);
-
-      # ── 默认 preset + roster 接管(两行舞,face 树)───────────────────
-      # 机制(实证 profile-boot-*.js:180):clobber 只打 id "agent-presets"
-      # —— 禁 base 行(随之行失效),异 id 重插同包实例带自定义 roots,
-      # roster = [farm(system), user]。default 直接进新行 config
-      # (settings 协调退役:行恒在,settings 用户层恒胜行 —— freeform
-      # 撞 typed 仍 throw)。值的声明点挂交互插件(defaultPreset 经
-      # faceName 找树,改名自动跟随);非 face 插件设值 → throw。
-      globalDefaultPreset = cfg.defaultPreset or null;
-      _defaultPresetAssert =
-        let
-          enabledPlugins = lib.filterAttrs (_: p: p.enable) (cfg.plugins or { });
-          noTree = filter
-            (name:
-              (cfg.plugins.${name}.defaultPreset or null) != null
-              && faceOf name cfg.plugins.${name} == null)
-            (attrNames enabledPlugins);
-          freeformClash =
-            (cfg.settings or { }) ? "agent-presets"
-            && ((cfg.defaultPreset or null) != null
-              || any (name: (cfg.plugins.${name}.defaultPreset or null) != null)
-                (attrNames enabledPlugins));
-          # id 枚举校验(eval 期可知全集 = shipped ∪ declared ∪ discovered;
-          # shipped 经 readDir 枚举,与 buildPresetFarm 同源同 IFD 前例)。
-          # 模块 enum 类型引用兄弟配置会递归,故以 fail-loud 断言等价实现
-          # (excludedPresets 同款:throw 列出全集)。手写 $DSH_HOME preset
-          # 仍可 UI 手选(roster user 根热发现),但不得锚定声明式默认 ——
-          # 要锚定就经 presets.<id>.source 声明接管(DSH_HOME 清空后默认
-          # 仍在)。黑名单 id 被踢出 discovered → 同样拒(矛盾声明)。
-          knownIds =
-            (attrNames declaredPresets)
-            ++ (attrNames discoveredPresets)
-            ++ shippedPresetNames pkgs;
-          knownMsg = concatStringsSep ", " knownIds;
-          globalUnknown =
-            globalDefaultPreset != null && !elem globalDefaultPreset knownIds;
-          badFaces = filter
-            (t: !elem faceDefaultPresetRows.${t} knownIds)
-            (attrNames faceDefaultPresetRows);
-          headBadFace = builtins.head badFaces;
-        in
-        if noTree != [ ] then
-          throw "programs.dsh.plugins.${builtins.head noTree}: defaultPreset set on a non-face plugin (no interactive tree to render into — face trees come exclusively from face plugins; global defaultPreset covers the rest)"
-        else if freeformClash then
-          throw "programs.dsh: settings.\"agent-presets\" freeform declaration conflicts with defaultPreset/plugins.<name>.defaultPreset — the settings user layer would shadow the roster rows; drop the freeform section or the typed option"
-        else if globalUnknown then
-          throw "programs.dsh.defaultPreset: '${globalDefaultPreset}' is not a known preset (known: ${knownMsg}) — typo, or a hand-written runtime preset? Declare it via programs.dsh.presets.<id>.source to anchor the declarative default (hand-written presets stay UI-selectable)"
-        else if badFaces != [ ] then
-          throw "programs.dsh.plugins.*.defaultPreset (tree '${headBadFace}'): '${faceDefaultPresetRows.${headBadFace}}' is not a known preset (known: ${knownMsg}) — typo, excludedPresets blacklisted, or hand-written? Declare it via programs.dsh.presets.<id>.source (hand-written presets stay UI-selectable)"
-        else null;
-      # per-插件值 → 树名(经 faceName 推导,与 faceProfiles 生成同链)
-      faceDefaultPresetRows =
-        let
-          faceNameOf = name: p:
-            let f = faceOf name p; in
-            if f == true then lib.removePrefix "dsh-" name else f;
-          fromPlugins = lib.flatten (mapAttrsToList
-            (name: p:
-              let v = p.defaultPreset or null; in
-              if p.enable && v != null then [{ tree = faceNameOf name p; value = v; }] else [ ])
-            (cfg.plugins or { }));
-        in
-        listToAttrs (map (e: nameValuePair e.tree e.value) fromPlugins);
-
-      # ── 权限模式(新会话默认;宿主组合层,per-face 物理成立)─────────
-      # 三行同步一致(sandbox-policy.mode / approval.policy /
-      # permission.defaultPreset),knobs 不匹配任何 preset → 上游
-      # 推断 "custom" → throw(dsh-permission-presets :116)。
-      # 与 defaultPreset 的 settings 协调不同:permission 的 settings
-      # 命名空间是 UI 手选的运行时用户层,nixdsh 不写也不清 —— 行
-      # config 是组合层基底,UI 手选后遮蔽本选项(caveat 入文档)
-      _permissionAssert =
-        let
-          enabledPlugins = lib.filterAttrs (_: p: p.enable) (cfg.plugins or { });
-          noTree = filter
-            (name: (cfg.plugins.${name}.permissionMode or null) != null && faceOf name cfg.plugins.${name} == null)
-            (attrNames enabledPlugins);
-        in
-        if noTree != [ ] then
-          throw "programs.dsh.plugins.${builtins.head noTree}: permissionMode set on a non-face plugin (no interactive tree to render into; global programs.dsh.permissionMode covers the rest)"
-        else null;
-      globalPermissionMode = cfg.permissionMode or null;
-      # per-树值(推导链同 defaultPresetRows);perProfile 注入三行,
-      # later-wins 胜过全局行(全局也进 perProfile 的同一列表前部)
-      facePermissionRows =
-        let
-          faceNameOf = name: p:
-            let f = faceOf name p; in
-            if f == true then lib.removePrefix "dsh-" name else f;
-          fromPlugins = lib.flatten (mapAttrsToList
-            (name: p:
-              let v = p.permissionMode or null; in
-              if p.enable && v != null then [{ tree = faceNameOf name p; value = v; }] else [ ])
-            (cfg.plugins or { }));
-        in
-        listToAttrs (map (e: nameValuePair e.tree e.value) fromPlugins);
-      # read-only 是合法 sandbox mode(dsh-sandbox-policy SANDBOX_MODES)
-      # 但上游 preset 表只有 workspace-write/danger-full-access 两条,服务
-      # 构造即 resolve(defaultPreset),未知即 throw。presets 是 z.dict
-      # 整表替换语义(default 仅在键缺省时生效)→ 注册 read-only 必须整表
-      # 重述:上游两条逐字镜像(sandbox/approval 是负载键,镜像上游常量;
-      # name/description 漂移仅影响 UI 文案)+ read-only 本地新条目。
-      # 副作用(正):表变三键后,运行期手切 read-only 的会话也能被 derive
-      # 命中显示为命名 preset 而非 custom。
-      permissionPresetsWithReadOnly = {
-        "workspace-write" = {
-          sandbox = "workspace-write";
-          approval = "ask";
-          name = "workspace-write";
-          description = "Write inside the workspace and permitted temporary directories; wider retries require approval.";
-        };
-        "danger-full-access" = {
-          sandbox = "danger-full-access";
-          approval = "never";
-          name = "danger-full-access";
-          description = "Full file access without approval prompts.";
-        };
-        "read-only" = {
-          sandbox = "read-only";
-          approval = "ask";
-          name = "read-only";
-          description = "Read-only file access; modifications require switching presets.";
-        };
+      # ── 各域(独立求值,断言随域)──────────────────────────────
+      seam = webseam.mk { inherit cfg pkgs; };
+      llm = llmseam.mk { inherit cfg; };
+      mcp = mcprows.mk { inherit cfg; };
+      subagent = subagents.mk { inherit cfg; };
+      facePlugins = faces.faceProfiles { inherit cfg pkgs; };
+      scanned = discovery.scan { inherit cfg pkgs; };
+      declaredPresets = validatePresets (cfg.presets or { });
+      rosterLayer = roster.mk {
+        inherit cfg pkgs;
+        discovered = scanned.presets;
+        declared = declaredPresets;
+        webSeamRows = seam.rows;
       };
-      permissionRowsFor = tree:
-        let mode = facePermissionRows.${tree} or globalPermissionMode; in
-        if mode == null then [ ]
-        else [
-          { id = "sandbox-policy"; config.mode = mode; }
-          { id = "approval"; config.policy = if mode == "danger-full-access" then "never" else "ask"; }
-          {
-            id = "permission";
-            config = { defaultPreset = mode; }
-              // (if mode == "read-only" then { presets = permissionPresetsWithReadOnly; } else { });
-          }
-        ];
+      allProfileNames = (attrNames (cfg.profiles or { })) ++ (attrNames facePlugins);
+
+      # ── 跨域断言(表驱动,首个命中即 throw)───────────────────
+      # 依赖冲突:skills/presets 的发现插件在 base 树默认启用,显式
+      # disable 会让物化文件无人消费 —— 静默失效比报错更糟,eval 期
+      # fail-loud。(MCP 插件随 insert 行自带,无此冲突;presets 的
+      # roster 行资格见 faces.rosterEligible,属上游 per-face 行为)
+      inbox = id: (cfg.inBoxPlugins or { }).${id} or { enable = null; };
+      skillProviderOff = (inbox "skill-filesystem").enable == false;
+      presetRosterOff = (inbox "agent-presets").enable == false;
+      violations = [
+        {
+          cond = (cfg.skills or { }) != { } && skillProviderOff;
+          msg = "programs.dsh: skills are declared but inBoxPlugins.skill-filesystem.enable = false — no filesystem skill provider would discover them; remove the skills or re-enable the provider";
+        }
+        {
+          cond = (cfg.presets or { }) != { } && presetRosterOff;
+          msg = "programs.dsh: presets are declared but inBoxPlugins.agent-presets.enable = false — the preset roster is disabled; remove the presets or re-enable the roster";
+        }
+        {
+          # 权限模式挂在非 face 插件上:无树可渲染(镜像 roster 的
+          # defaultPreset 断言,同一"值挂树"纪律)
+          cond = (findFirst
+            (name: (cfg.plugins.${name}.permissionMode or null) != null
+              && faces.faceOf pkgs name cfg.plugins.${name} == null)
+            null (attrNames (filterAttrs (_: p: p.enable) (cfg.plugins or { })))) != null;
+          msg = let name = findFirst
+            (name: (cfg.plugins.${name}.permissionMode or null) != null
+              && faces.faceOf pkgs name cfg.plugins.${name} == null)
+            null (attrNames (filterAttrs (_: p: p.enable) (cfg.plugins or { }))); in
+            "programs.dsh.plugins.${name}: permissionMode set on a non-face plugin (no interactive tree to render into; global programs.dsh.permissionMode covers the rest)";
+        }
+      ];
+      crossAssert = let first = findFirst (v: v.cond) null violations; in
+        if first != null then throw first.msg else null;
+
+      # ── per-插件 contributions(功能插件分发)──────────────────
       targetsFor = p:
         if p.profiles == [ ] then allProfileNames
-        else filter (n: builtins.elem n allProfileNames) p.profiles;
+        else filter (n: elem n allProfileNames) p.profiles;
       patchRows = p:
-        (lib.optional (p.settings != { }) (
+        (optional (p.settings != { }) (
           if p.patchId == null then
             throw "programs.dsh.plugins: settings given but patchId is null"
           else { id = p.patchId; config = p.settings; }
@@ -369,10 +110,11 @@ let
       contributions = mapAttrsToList
         (name: con: {
           profiles = targetsFor con;
-          plugin = { inherit name; source = sourceOf name con; };
+          plugin = { inherit name; source = registry.sourceOf pkgs name con; };
           patches = patchRows con;
         })
-        (lib.filterAttrs (name: p: p.enable && faceOf name p == null) cfg.plugins);
+        (filterAttrs (name: p: p.enable && faces.faceOf pkgs name p == null) cfg.plugins);
+
       # in-box 条目行(全局,进所有 profile 的用户 patch 层;行级 disabled 键
       # 是 cordis loader 原生语义,实测可双向覆盖 bundle 层的 disabled)
       inBoxPatches =
@@ -381,446 +123,48 @@ let
             { inherit id; }
             // (lib.optionalAttrs (p.enable != null) { disabled = !p.enable; })
             // (lib.optionalAttrs (p.config != { }) { inherit (p) config; }))
-          cfg.inBoxPlugins;
-      # MCP 服务器行(rc.5 dsh-mcp-client 实测):插件不在默认树,每 server
-      # 一个条目,包裹成 insert 行 —— cordis patch applier 对组合树里不
-      # 存在的 id 只 warn+skip(实测 cordis-plugin-include:`patch: entry
-      # not found`,7 行全丢、/mcp 空屏),新条目必须走 insert 通道
-      # (data.push)。config 判别联合由 transport 定形;null/空省略;
-      # settings 逃生口最后并。env/headers 值支持 secretFile 形态 →
-      # 占位符渲染(见 renderSecretVal),refs 收集给 wrapper 注入。
-      # 插件随行:设置 mcpServers 即插入 @deepseek-ai/dsh-mcp-client,
-      # 无法经 inBoxPlugins 关闭(id 不在树上,disable 行同样 not-found
-      # 跳过)—— 不装就删 mcpServers 条目
-       # stdio stderr 收纳:SDK 默认 inherit(stdio.js `?? 'inherit'`)
-       # → 子进程日志刷终端(TUI 遮挡)。包装 command 为 sh -c,
-       # stderr 追加到 $XDG_STATE_HOME/deepseek-harness/mcp/<name>.log
-       # (mkdir -p 幂等;日志保留排查能力)。env/cwd 不受影响(row 级
-       # 配置作用在 exec 后的真实进程上)。opt-out 走 mcpStderrToLog。
-       # sh -c 形状:'-c' script <command> <args...> → script 内
-       # $@ = 原命令+参数,原样 exec。
-       mcpStderrToLog = cfg.mcpStderrToLog or true;
-       stderrWrap = name: m:
-         let
-           # 日志文件名内插进双引号串,转义 shell 元字符(attr 名常规是
-           # 标识符,防御即可)
-           logName = lib.escape [ "$" "\"" "\\" "`" ] name;
-           script = ''
-             _d="''${XDG_STATE_HOME:-$HOME/.local/state}/deepseek-harness/mcp"
-             mkdir -p "$_d"
-             exec "$@" 2>>"$_d/${logName}.log"
-           '';
-          in
-          {
-            command = "sh";
-            # '-c' script $0 cmd args...:$0 占位(sh),命令+参数全在 $@ ——
-            # 直接把 cmd 放 $0 位则 exec "$@" 丢命令、把首参数当选项
-            args = [ "-c" script "sh" m.command ] ++ (m.args or [ ]);
-          };
-       mcpSecret =
-         let
-           renderServer = name: m:
-             let
-               common = { inherit (m) transport; serverName = name; }
-                 // (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
-                   toolCallTimeoutMs = m.toolCallTimeoutMs or null;
-                   failOnStartupError = m.failOnStartupError or null;
-                 })
-                 // (m.settings or { });
-               body =
-                 if m.transport == "stdio" then
-                   let
-                     extras = lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
-                       inherit (m) env;
-                       cwd = m.cwd or null;
-                     };
-                   in
-                   if mcpStderrToLog then (stderrWrap name m) // extras
-                   else extras // (lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
-                     inherit (m) args;
-                     command = m.command or null;
-                   })
-                 else
-                  lib.filterAttrs (_: v: v != null && v != { } && v != [ ]) {
-                    url = m.url or null;
-                      headers = m.headers or { };
-                    };
-            in
-            {
-              id = "mcp-${name}";
-              name = "@deepseek-ai/dsh-mcp-client";
-              config = common // body;
-            };
-          renderedServers = mapAttrs renderServer (cfg.mcpServers or { });
-          # env/headers 二次渲染为占位符,同时收集 refs
-          withSecrets = mapAttrs
-            (name: row:
-              let
-                env' = if row.config ? env then (renderSecretAttrs row.config.env).data else { };
-                headers' = if row.config ? headers then (renderSecretAttrs row.config.headers).data else { };
-                allRefs =
-                  (if row.config ? env then (renderSecretAttrs row.config.env).refs else [ ])
-                  ++ (if row.config ? headers then (renderSecretAttrs row.config.headers).refs else [ ]);
-              in
-              {
-                row = row // {
-                  config = removeAttrs row.config [ "env" "headers" ]
-                    // (optionalAttrs (env' != { }) { env = env'; })
-                    // (optionalAttrs (headers' != { }) { headers = headers'; });
-                };
-                refs = allRefs;
-              })
-            renderedServers;
-        in
-        {
-          rows = map (row: { insert = [ row ]; })
-            (attrValues (mapAttrs (_: w: w.row) withSecrets));
-          refs = lib.unique (concatMap (w: w.refs) (attrValues withSecrets));
-        };
-      mcpPatches = mcpSecret.rows;
-      mcpSecretRefs = mcpSecret.refs;
-       # 配置承载型三态的 patch 侧。webSearch 是选择器形态(README:声明
-       # 必有效,在场或被选择器解释):
-       #   null  → 骨架(web/tool-web)+ base 自带后端(deepseek)全禁
-       #   str   → 骨架启用(树自带行不动);未选中后端禁行(死卡清理:
-       #           未选中 provider 在场只有死 UI/必败调用)
-       # 追加在 inBoxPatches 之后,同 id 后行胜过(_usageAssert 拦显式
-       # 冲突;顺带的 enable=null 不表态无冲突)。
-       # ⚠ "选中才启用"的前提:provider 切换在上游是**行级变化**
-       # (dsh-web 源码实证:WebRuntime 无 settings 命名空间,
-       # searchProvider 是行 Config,构造器一次性定格,env
-       # DSH_WEB_SEARCH_PROVIDER 也仅 boot 读)——声明并在场但未选中
-       # 只会留死卡,禁行无运行时代价。若上游将来把选择 id 接进 settings
-       # 热重载(即可运行时切换),此策略应改为"声明即在,选择器热切",
-       # 本行组随之收敛为能力骨架行(web/tool-web)。
-       cfgWs = cfg.webSearch or null;
-       cfgWsProviders = cfg.webSearchProviders or { };
-       # 后端声明归一:id → { rowId; rowName(null=base 自带); rowConfig;
-       # source(null=base 自带); namespace(null=无 settings 段) }。
-       # 预置 = 默认值里的完整声明(语法糖,非代码分支):新后端接入 =
-       # 一条声明带 row/source,零 nixdsh 改动(开放注册表)
-       wsBackend = id: p:
-         let
-           # 显式声明(带 row.name 的 = 非 base 自带);裸 attrs = base
-           # 自带后端的纯参数声明(向后兼容预置写法)
-           hasRow = p ? row && p.row ? name;
-           # 行 id 缺省 = 包名尾段剥 dsh- 前缀:@tonydua/dsh-web-search-exa
-           # → web-search-exa(与包自 bundle patch 的行 id 约定一致);
-           # 尾段已带 web-search- 前缀则原样,无前缀才补(命名自由的后端)
-           rowIdOf = name:
-             let tail = lib.removePrefix "dsh-" (lib.last (lib.splitString "/" name)); in
-             if lib.hasPrefix "web-search-" tail then tail else "web-search-${tail}";
-          in
-          {
-            # submodule 输出 row.id 恒存在(default null),`or` 不触发,
-            # 须显式判空(裸 attrs 声明两种路径都走对)
-            rowId =
-              if hasRow then
-                (let id = p.row.id or null; in
-                 if id != null then id else rowIdOf p.row.name)
-              else "web-search-${id}";
-            rowName = if hasRow then p.row.name else null;
-            # secretFile 派生:行 config 未显式给 apiKeyEnv 时注入派生值
-            #(行自描述,免疫上游默认漂移;显式 apiKeyEnv 优先)
-            rowConfig =
-              let
-                base = if hasRow then (p.row.config or { }) else (removeAttrs p [ "settings" "source" ]);
-              in
-              if hasRow && (p.row.secretFile or null) != null && !(base ? apiKeyEnv) then
-                base // { apiKeyEnv = secretEnvName p.row.secretFile; }
-              else base;
-          source = if hasRow then (p.source or null) else null;
-          # 同 rowId:submodule 下 or 不触发,显式判空
-          namespace =
-            let ns = if hasRow then (p.row.settingsNamespace or null) else null; in
-            if ns != null then ns else "web-search-${id}";
-        };
-       wsBackends = mapAttrs wsBackend
-         (cfgWsProviders // { "deepseek-official" = cfgWsProviders."deepseek-official" or { }; });
-       # 未选中后端行(声明了但未选中 → 禁行;base 自带的 deepseek 行
-       # 同理:能力禁用或选中别的)
-       wsDisable =
-        # 骨架:能力禁用时
-        (lib.optionals (cfgWs == null) [ "web" "tool-web" ])
-        # base 自带 deepseek 行:能力禁用,或选中的不是它
-        ++ (lib.optionals (cfgWs == null || cfgWs != "deepseek-official")
-          [ "web-search-deepseek" ])
-        # 非 base 后端行(声明了但未选中;有 rowId 的才算得出)
-        ++ (lib.filter (id: id != cfgWs && wsBackends.${id}.rowName != null)
-          (attrNames cfgWsProviders));
-       capabilityPatches =
-        (map (id: { inherit id; disabled = true; }) wsDisable)
-        ++ (lib.optionals ((cfg.llmDeepseek or null) == null)
-          [ { id = "llm-deepseek"; disabled = true; } ])
-        ++ (lib.optionals ((cfg.providers or { }) == null)
-          [ { id = "llm-pi-ai"; disabled = true; } ]);
-      # 选中后端(带 row.name = 非 base)→ insert 行;base 自带后端无行
-      #(树里已有)。行 config = 声明的 row.config
-      wsProviderRows =
-        let sel = if cfgWs == null then null else wsBackends.${cfgWs} or null; in
-        lib.optionals (sel != null && sel.rowName != null) [
-          {
-            id = sel.rowId;
-            name = sel.rowName;
-            config = sel.rowConfig;
-          }
-        ];
-      # 选中后端的包源(非 base 自带才有;声明 source 或 registry 尾名反查)
-      wsProviderSources =
-        let sel = if cfgWs == null then null else wsBackends.${cfgWs} or null; in
-        lib.optionals (sel != null && sel.rowName != null)
-          (if sel ? source && sel.source != null && sel != null then [ sel.source ]
-           else [ (registryLookup sel.rowId) ]);
-      # 选中非 base 后端 → web 行重述 searchProvider(patch 整行替换,
-      # base 行只此一键,重述干净)
-      wsSelectorRow =
-        if cfgWs != null && cfgWs != "deepseek-official" then
-          [ { id = "web"; config = { searchProvider = cfgWs; }; } ]
-        else [ ];
-      # ── fetch 缝(镜像 ws 组;差异:无 base 自带后端 → 无裸 attrs 形态,
-      # 无骨架行(默认态 = base 现状 fetch: false,非禁行),选中必声明)
-      cfgWf = cfg.webFetch or null;
-      cfgWfProviders = cfg.webFetchProviders or { };
-      wfBackend = id: p:
-        let
-          rowIdOf = name:
-            let tail = lib.removePrefix "dsh-" (lib.last (lib.splitString "/" name)); in
-            if lib.hasPrefix "web-fetch-" tail then tail else "web-fetch-${tail}";
-          base = p.row.config or { };
-        in
-        {
-          # 显式判空:submodule 输出 row.id/settingsNamespace 恒存在(default
-          # null),`or` 不触发(checks 裸 attrs 直调测不到 module 路径)
-          rowId =
-            let id = p.row.id or null; in
-            if id != null then id else rowIdOf p.row.name;
-          rowName = p.row.name;
-          rowConfig =
-            if (p.row.secretFile or null) != null && !(base ? apiKeyEnv) then
-              base // { apiKeyEnv = secretEnvName p.row.secretFile; }
-            else base;
-          source = p.source or null;
-          namespace =
-            let ns = p.row.settingsNamespace or null; in
-            if ns != null then ns else "web-fetch-${id}";
-        };
-      wfBackends = mapAttrs wfBackend cfgWfProviders;
-      # 选中 → insert 行 + web 行重述 fetchProvider + tool-web 行重述
-      # fetch: true(base 的 SSRF 保险丝;委托型 provider 无此面,显式
-      # 打开 —— 打开动作本身即"我信任这个 provider 的 SSRF 姿态"声明)
-      wfProviderRows =
-        let sel = if cfgWf == null then null else wfBackends.${cfgWf} or null; in
-        lib.optionals (sel != null) [
-          { id = sel.rowId; name = sel.rowName; config = sel.rowConfig; }
-          { id = "web"; config = { fetchProvider = cfgWf; }; }
-          { id = "tool-web"; config = { fetch = true; }; }
-        ];
-      wfDisable =
-        # 声明未选中后端行(备案待命 → 禁行,死卡清理;同 ws 语义)
-        lib.filter (id: id != cfgWf) (attrNames cfgWfProviders);
-      wfDisableRows = map (id: { id = wfBackends.${id}.rowId; disabled = true; }) wfDisable;
-      wfProviderSources =
-        let sel = if cfgWf == null then null else wfBackends.${cfgWf} or null; in
-        lib.optionals (sel != null)
-          (if sel.source != null then [ sel.source ]
-           else [ (registryLookup sel.rowId) ]);
-       # fetch 缝行组(未选中禁行 + 选中 insert/选择器/保险丝)
-       wfRows = wfDisableRows ++ wfProviderRows;
+          (cfg.inBoxPlugins or { });
 
-      # ── subagent 委托实例(subagents.<name> → dsh-tool-subagent 行)───
-      # 新行 id 不在树上 → insert 通道(同 MCP;裸 patch 只会 warn+skip)。
-      # 行落宿主组合层 global 层:preset 会话经 dsh-tools view() 的
-      # global 基底看到新 toolName(只遮蔽同名),故不进 buildPreset
-      # rows —— 与 wf/ws 的同 id 遮蔽根因不同。child 组合/权限固定
-      # 见 README subagent 调研节。
-      # assert 单独出口:结果集 WHNF(顶层 seq 链)即炸,不依赖行被消费
-      subagentRender =
-        let
-          entries = lib.filterAttrs (_: p: p.enable or false) (cfg.subagents or { });
-          toolNameOf = name: p: p.toolName or "subagent_${name}";
-          # 工具名查重(实例间 + base 全局名/控制工具):撞名 = 上游
-          # boot 期 "already registered"(上游 TODO 已认晚期),前移到
-          # eval 期。control 工具(send_message 等)是全局注册,同样在
-          # global 层冲突
-          reservedToolNames = [
-            "subagent" "subagent_fork"
-            "send_message" "interrupt_agent" "list_agents" "report"
-          ];
-          names = mapAttrsToList toolNameOf entries;
-          dupNames = filter (n: builtins.length (filter (m: m == n) names) > 1)
-            (lib.unique names);
-          reservedHit = filter (n: builtins.elem n reservedToolNames) names;
-          # 生成行 id 撞 base 既有 id(attr 名 "fork"/"" → tool-subagent-fork
-          # /tool-subagent)→ insert 出重复 id,entryMap 混乱
-          idClash = filter (name: builtins.elem name [ "fork" "" ]) (attrNames entries);
-          # agentOptions/toolFilter 空值过滤后渲染(全空省略整键);
-          # `or` 缺省:裸 attrs fixture 不走 module system 无 default
-          agentOpts = p:
-            let ao = p.agentOptions or null; in
-            if ao == null then { }
-            else lib.filterAttrs (_: v: v != null) {
-              provider = ao.provider or null;
-              model = ao.model or null;
-              maxTokens = ao.maxTokens or null;
-            };
-          filterOpts = p:
-            let
-              tf = p.toolFilter or null;
-              allow = if tf == null then [ ] else tf.allow or [ ];
-              deny = if tf == null then [ ] else tf.deny or [ ];
-            in
-            (lib.optionalAttrs (allow != [ ]) { inherit allow; })
-            // (lib.optionalAttrs (deny != [ ]) { inherit deny; });
-        in
-        {
-          assertion =
-            if idClash != [ ] then
-              throw "programs.dsh.subagents: instance name(s) ${concatStringsSep ", " idClash} would generate row ids clashing with base tree rows (tool-subagent/tool-subagent-fork); pick another name"
-            else if dupNames != [ ] then
-              throw "programs.dsh.subagents: duplicate toolName(s) ${concatStringsSep ", " dupNames} across instances — the model-facing name registers once per tool layer"
-            else if reservedHit != [ ] then
-              throw "programs.dsh.subagents: toolName(s) ${concatStringsSep ", " reservedHit} collide with base/global control tools (subagent, subagent_fork, send_message, interrupt_agent, list_agents, report); override toolName explicitly"
-            else null;
-          rows = mapAttrsToList
-            (name: p: {
-              insert = [({
-                id = "tool-subagent-${name}";
-                name = "@deepseek-ai/dsh-tool-subagent";
-                config = {
-                  provider = p.provider or "spawn";
-                  toolName = toolNameOf name p;
-                }
-                // (optionalAttrs ((p.backgroundMode or null) != null) { backgroundMode = p.backgroundMode; })
-                // (optionalAttrs ((p.enableRunInBackground or null) != null) { enableRunInBackground = p.enableRunInBackground; })
-                // (optionalAttrs (agentOpts p != { }) { agentOptions = agentOpts p; })
-                // (optionalAttrs ((p.persona or null) != null) { persona = p.persona; })
-                // (optionalAttrs (filterOpts p != { }) { toolFilter = filterOpts p; })
-                // (optionalAttrs ((p.maxDepth or null) != null) { maxDepth = p.maxDepth; });
-              }) ];
-            })
-            entries;
-        };
-      _subagentAssert = subagentRender.assertion;
-      subagentRows = subagentRender.rows;
+      # ── 权限模式:全局行组(进所有树前部;per-face 行 later-wins 胜)
+      globalPermissionMode = cfg.permissionMode or null;
+      facePermissionRows = faces.faceValues cfg pkgs "permissionMode";
+      permissionRowsFor = tree:
+        let mode = facePermissionRows.${tree} or globalPermissionMode; in
+        if mode == null then [ ] else permission.rowsFor mode;
 
-
-      # ── preset 自动发现(插件托管 preset,liangshen 形态)─────────────
-      # enabled 插件经 sourceOf 解析后的源(source null 的零 source 插件
-      # 也在解析后拿到 registry derivation):passthru.dshPresets(registry,
-      # update.py 收录时探测物化)/ 直扫 presets/ 目录(path 源)。
-      # 发现即接管 —— 物化剥 tui marker 后 ensurePackagedPresets 视为
-      # conflict 永不碰;插件 disable → 孤儿清理随动。用户显式
-      # presets.<name> 声明与发现撞名 → 显式胜(声明即接管先例,
-      # 合流在 hm-module 侧:discovered // declared)
-      # 单次扫描双轨:{ presets = 接管面(既有语义); origins = 插件归属
-      # (preset id → 插件名;dsh-presets 命令数据源,lib.presetOrigins 消费) }
-      discovered =
-        let
-          scanSrc = src:
-            if builtins.isPath src then
-              (if builtins.pathExists "${toString src}/presets" then
-                listToAttrs (map
-                  (id: { name = id; value = "${toString src}/presets/${id}"; })
-                  (filter
-                    (id: builtins.pathExists "${toString src}/presets/${id}/agent.cordis.yml"
-                      && builtins.readFileType "${toString src}/presets/${id}" == "directory")
-                    (attrNames (builtins.readDir "${toString src}/presets"))))
-              else { })
-            else if lib.isDerivation src && (src.passthru or { }) ? dshPresets then
-              listToAttrs (map
-                (id: { name = id; value = "${toString src}/presets/${id}"; })
-                src.passthru.dshPresets)
-            else { };
-          # 黑名单过滤 + typo/残留 fail-loud:排除 id 必须在探测集内
-          # (拼错,或上游已删该 preset 而排除表未清 → 配置腐烂,报错清理)
-          filterExcluded = name: p: scanned:
-            let
-              excluded = p.excludedPresets or [ ];
-              unknown = filter (id: !scanned ? ${id}) excluded;
-            in
-            if unknown != [ ] then
-              throw "programs.dsh.plugins.${name}: excludedPresets lists '${builtins.head unknown}' but the plugin ships no such preset (detected: ${concatStringsSep ", " (attrNames scanned)}) — typo, or stale after upstream drop?"
-            else builtins.removeAttrs scanned excluded;
-          scanOf = name: p:
-            let r = builtins.tryEval (sourceOf name p); in
-            if r.success then filterExcluded name p (scanSrc r.value) else { };
-        in
-        # tryEval:sourceOf 对未知插件 throw(与插件分发同语义),发现面
-        # 不放大 —— 单个插件源解析失败不影响其余(该错误在分发路径已
-        # fail-loud,这里不必重复炸)。
-        # presets = false 全禁(与 face=false 的"压制自动通道"同构);
-        # 与 excludedPresets 非空同设 → 矛盾声明 throw
-        builtins.foldl'
-          (acc: name:
-            let
-              p = (cfg.plugins or { }).${name} or null;
-              merge = scanned: {
-                presets = acc.presets // scanned;
-                origins = acc.origins // mapAttrs (_: _: name) scanned;
-              };
-            in
-            if p == null || !p.enable then acc
-            else if !(p.presets or true) then
-              (if (p.excludedPresets or [ ]) != [ ] then
-                throw "programs.dsh.plugins.${name}: presets = false (take over none) conflicts with a non-empty excludedPresets — pick one"
-               else acc)
-            else merge (scanOf name p))
-          { presets = { }; origins = { }; }
-          (attrNames (cfg.plugins or { }));
-      discoveredPresets = discovered.presets;
-      discoveredOrigins = discovered.origins;
-
-      # ── preset farm(roster 根,单一 store 目录)────────────────────
-      # 全部 preset 重放产物:shipped 全量(能力行进 shipped —— 手选
-      # 逃逸关闭)+ discovered + declared(声明即接管,同名胜)。
-      # 行组与旧物化语义一致(insert 行被 buildPreset 自然滤掉)
-      declaredPresets = validatePresets (cfg.presets or { });
-      presetFarm = buildPresetFarm {
-        inherit pkgs;
-        rows = wfRows ++ wsProviderRows ++ wsSelectorRow;
-        declared = declaredPresets;
-        discovered = discoveredPresets;
-      };
-      # 两行舞:禁 base 行(clobber 只打 id "agent-presets",随之失效)
-      # + 异 id 重插同包实例带 farm roots。default = per-face 值,
-      # 缺省全局,再缺省 standard(与 base 行原值同)。仅 face 树
-      # (base/headless 无 roster 行,插入即引入服务 —— 不做)
-      presetRosterRows = tree:
-        let
-          fallback = if globalDefaultPreset != null then globalDefaultPreset else "standard";
-          default = faceDefaultPresetRows.${tree} or fallback;
-        in
-        [
-          { id = "agent-presets"; disabled = true; }
-          {
-            insert = [ {
-              id = "agent-presets-nix";
-              name = "@deepseek-ai/dsh-agent-presets";
-              config = {
-                inherit default;
-                roots = [ { path = toString presetFarm; trust = "system"; } ];
-              };
-            } ];
-          }
-        ];
-     in
-     builtins.seq _faceExclusivityAssert (builtins.seq _defaultPresetAssert (builtins.seq _permissionAssert (builtins.seq _subagentAssert {
+      # roster 舞资格按 face 插件逐个判定:带资格的 face 树名集合
+      # (headless 等 base 无 agent-presets 行的树不出舞 —— 出了只有
+      # 幽灵禁行警告 + 向无 preset 语义的树注入服务)
+      rosterTrees = listToAttrs
+        (map
+          (name: nameValuePair (faces.faceNameOf pkgs name cfg.plugins.${name}) true)
+          (attrNames (filterAttrs
+            (name: p: p.enable
+              && faces.faceOf pkgs name p != null
+              && faces.rosterEligible { inherit cfg pkgs name p; })
+            (cfg.plugins or { }))));
+    in
+    builtins.seq (faces.exclusivityAssert { inherit cfg pkgs; })
+    (builtins.seq crossAssert
+    (builtins.seq subagent.assertion {
       # 全局 in-box 条目行(typed 插件层 patch 之后再追加;同一 id 后行胜过)
       inherit inBoxPatches;
-      # MCP 服务器行(同样全局,追加在 in-box 行之后)
-      mcpPatches = mcpPatches;
-      # 三态 typed 选项的行组(disable + 后端行 + 选择器行;追加在 in-box 行之后)
-      inherit capabilityPatches wsProviderRows wsSelectorRow wfRows;
-      # secret 占位符引用的文件路径清单(wrapper 注入块消费)
-      inherit mcpSecretRefs;
+      # MCP 服务器行(全局,追加在 in-box 行之后)
+      mcpPatches = mcp.rows;
+      # secret 占位符引用的文件路径清单(wrapper 注入块消费,结构化单源)
+      mcpSecretRefs = mcp.refs;
+      # web 缝行组(disable/insert/重述,单 owner;追加在 in-box 行之后)
+      webSeamRows = seam.rows;
+      # LLM 适配器三态行组
+      llmRows = llm.rows;
       # face 插件自动生成的 profile(与显式 profiles 同形,键 = face 名)
       inherit facePlugins;
       # 插件源自动发现的 preset(显式声明合流在消费侧,显式胜)
-      inherit discoveredPresets;
+      discoveredPresets = scanned.presets;
       # discovered 归属配套输出(preset id → 插件名;dsh-presets 命令链)
-      inherit discoveredOrigins;
-      # roster 接管:farm 路径(dsh-presets 命令消费)+ 两行舞进 face 树
-      presetFarm = toString presetFarm;
+      discoveredOrigins = scanned.origins;
+      # roster 接管:farm 路径(dsh-presets 命令消费)+ 舞行进 face 树
+      presetFarm = toString rosterLayer.farm;
       # 权限模式:全局行组(进所有树前部;per-face 行 later-wins 胜)
       inherit permissionRowsFor;
       # profile 名 → { extraPlugins; extraPatches; }(追加在原始列表之后;
@@ -830,27 +174,24 @@ let
           (profileName: nameValuePair profileName {
             extraPlugins =
               (map (c: c.plugin.source)
-                (filter (c: builtins.elem profileName c.profiles) contributions))
-              ++ (lib.filter (s: s != null) wsProviderSources)
-              ++ (lib.filter (s: s != null) wfProviderSources);
+                (filter (c: elem profileName c.profiles) contributions))
+              ++ seam.sources;
             extraPatches =
               (concatMap (c: c.patches)
-                (filter (c: builtins.elem profileName c.profiles) contributions))
+                (filter (c: elem profileName c.profiles) contributions))
               ++ inBoxPatches
-              ++ capabilityPatches
-              ++ wsProviderRows
-              ++ wsSelectorRow
-              ++ wfRows
-              ++ mcpPatches
-              ++ subagentRows
-              ++ (lib.optionals (facePlugins ? ${profileName})
-                (presetRosterRows profileName))
+              ++ llm.rows
+              ++ seam.rows
+              ++ mcp.rows
+              ++ subagent.rows
+              ++ (lib.optionals (rosterTrees ? ${profileName})
+                (rosterLayer.danceRows profileName))
               ++ (if globalPermissionMode == null then [ ] else permissionRowsFor profileName)
               ++ (lib.optionals (facePermissionRows ? ${profileName})
                 (permissionRowsFor profileName));
           })
           allProfileNames);
-     }))) ;
+    }));
 in
 {
   inherit applyPlugins;

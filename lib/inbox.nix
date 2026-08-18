@@ -5,10 +5,12 @@
 #   mkProfile     插件有序组合 → profile 声明(in-box 名单 + nix 插件分类,唯一性校验)
 #   buildProfile  profile 声明 → 不可变 store 工件:
 #                 package.json(dsh.profile.bundles 层序 + dependencies) + node_modules/ 符号链接
-#                 + cordis.patch.yml(用户 patch 层)。层序在求值期纯 Nix 计算,derivation 只做链接
+#                 + cordis.patch.yml(用户 patch 层,块式 YAML 经
+#                 patchesToYaml —— 支持上游 !!js 标签的 rawYaml 值)。
+#                 层序在求值期纯 Nix 计算,derivation 只做链接
 #
 # in-box bundles:dsh 自带、随安装分发,profile 只引用名字不做 symlink
-{ lib }:
+{ lib, patchesToYaml }:
 
 let
   inherit (lib)
@@ -26,13 +28,17 @@ let
     "@deepseek-ai/dsh-headless"
   ];
 
-  # in-box 交互面:bundle 名 → face 名("web" 被 dsh web 子命令硬编码 boot)。
-  # base 不在表中(公共内核层,不是交互面)。第三方交互面由 registry 的
-  # face 字段物化(plugins/overlay.nix passthru.dshFace),显式 plugins.<name>.face
-  # 优先生效 —— 三级推导:显式声明 > registry 元数据 > in-box 表
+  # in-box 交互面:bundle 名 → face 元数据("web" 被 dsh web 子命令硬编码
+  # boot)。base 不在表中(公共内核层,不是交互面)。第三方交互面由
+  # registry 的 face 字段物化(plugins/overlay.nix passthru.dshFace),
+  # 显式 plugins.<name>.face 优先生效 —— 三级推导:显式声明 > registry
+  # 元数据 > in-box 表。
+  # roster = 该 face 的 base 树是否带 agent-presets 行(store 实测:
+  # web-app 有 5 处引用,headless 零处)—— roster 两行舞只对带行的
+  # 树生效,headless 出舞 = 幽灵禁行 + 向无 preset 语义的树注入服务
   inBoxFaces = {
-    "@deepseek-ai/dsh-web-app" = "web";
-    "@deepseek-ai/dsh-headless" = "headless";
+    "@deepseek-ai/dsh-web-app" = { face = "web"; roster = true; };
+    "@deepseek-ai/dsh-headless" = { face = "headless"; roster = false; };
   };
 
   mkPlugin =
@@ -138,12 +144,14 @@ let
         ln -s ${escapeShellArg (toString p.packagePath)} "$out/node_modules/${escapeShellArg p.packageName}"
       '';
       # 显式 userPatchesFile 是全权委托,不再追加任何行(typed 层产物进
-      # userPatches,同样不落;需要共存时改用内联 userPatches)
+      # userPatches,同样不落;需要共存时改用内联 userPatches)。
+      # patchesToYaml:块式 YAML(与上游 patch 文件同格式),支持
+      # rawYaml 值(!!js 标签等)
       patchContent =
         if profile.userPatchesFile != null then
           ''cp ${escapeShellArg (toString profile.userPatchesFile)} "$out/cordis.patch.yml"''
         else
-          ''printf '%s' ${escapeShellArg (builtins.toJSON profile.userPatches)} > "$out/cordis.patch.yml"'';
+          ''printf '%s' ${escapeShellArg (patchesToYaml profile.userPatches)} > "$out/cordis.patch.yml"'';
     in
     pkgs.runCommand "dsh-profile-${profile.name}"
       {

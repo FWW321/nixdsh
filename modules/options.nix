@@ -7,13 +7,13 @@
 #   telemetry.mode;settings 整体 freeform(= 逃生口),model/models 等上游
 #   rc 阶段键名未稳(hieutran 写 models、TonyWu20 写 model)不 typed 化
 #
-# 插件形态判别(配置承载/裸用)与三层通道选择纪律见 README
-# 「插件形态与通道选择(设计准则)」—— typed 化决策依据:配置承载型
+# 插件形态判别(配置承载/裸用)与三层通道选择纪律见 docs/internals.md
+# 「设计准则:插件形态与通道选择」—— typed 化决策依据:配置承载型
 # 声明即启用/未声明即禁用,凭据也是配置(eval 期不猜运行时)
 { config, lib, pkgs, ... }:
 
 let
-  dshLib = import ../lib.nix { inherit lib; };
+  dshLib = import ../lib { inherit lib; };
 
   # 模型条目 submodule(models[] 与 modelOverrides 值共享形状,withId 切 id 键)
     # 模型条目 typed core(models[] 与 modelOverrides 值共享形状,
@@ -202,7 +202,7 @@ in
       description = "typed 便利键:渲染进 settings.telemetry.mode,覆盖 freeform 同名值";
     };
 
-    # 默认模型选择(dsh-agent-default-model 命名空间段,schema 实测于 rc.5
+    # 默认模型选择(dsh-agent-default-model 命名空间段,schema 实测于 rc.7
     # 源码:provider/model 必填,reasoningEffort 可选)。typed 覆盖 freeform
     # settings."agent-default-model" 同名键
     defaultModel = lib.mkOption {
@@ -222,7 +222,7 @@ in
             description = "模型 id(须在该 provider 的 models 清单内)";
           };
           reasoningEffort = lib.mkOption {
-            # 值域 = 上游 THINKING_LEVELS(实测 rc.5 源码):上游 settings schema
+            # 值域 = 上游 THINKING_LEVELS(实测 rc.7 源码):上游 settings schema
             # 宽松(z.string()),但请求期 fail("does not support reasoning
             # effort");enum 把该错误前移到 eval 期。上游加档时此处会
             # hard-fail —— 那正是 bump 提示
@@ -252,7 +252,7 @@ in
     # delegation 行的 preset;行是 agent 面能力,与前端无关),且行在
     # 宿主组合层 global 层对 preset 会话可见(dsh-tools view():global
     # 是所有 scope 视图基底,preset 只遮蔽同名 —— 无需 preset 重放,
-    # 与 wf/ws 同 id 遮蔽需重放的根因不同)。机制调研见 README。
+    # 与 wf/ws 同 id 遮蔽需重放的根因不同)。机制调研见 docs/internals.md「subagent 机制调研」。
     subagents = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
         options = {
@@ -377,11 +377,11 @@ in
     };
 
     # ── 配置承载型 typed 选项(三态:null 禁用/{} 显式启用/attrs 配置)──
-    # 设计准则与可见性规则见 README「插件形态与通道选择」:禁用行进
+    # 设计准则与可见性规则见 docs/internals.md「设计准则」:禁用行进
     # 所有 profile 用户 patch 层;attrs 渲染进对应 settings 命名空间段
     # (yq merge,免重启)。默认值由空载荷代价选出。
     #
-    # webSearch = 选择器形态(README:声明必有效,在场或被选择器解释):
+    # webSearch = 选择器形态(docs/internals.md:声明必有效,在场或被选择器解释):
     # 能力骨架行(web/tool-web)不设独立旋钮(假自由度:启 provider 必启、
     # 禁 provider 必禁);用户唯一的自由度是"provider 是谁"。
     webSearch = lib.mkOption {
@@ -392,23 +392,26 @@ in
       description = ''
         网页搜索能力开关 + provider 选择器(二合一:这是唯一的自由度)。
         null(默认)= 禁用:web/web-search-deepseek/tool-web disable 行
-        进所有 profile(base 树自带三行,故默认即禁,见 README 迁移注记)。
-        str = 启用并选中该 provider id:
+        进所有 profile(base 树自带三行,故默认即禁,见 README「网页搜索」;
+        webFetch 同设时除外 —— fetch 需要 web/tool-web 存活,此时只禁
+        搜索后端行)。str = 启用并选中该 provider id:
         - "deepseek-official"(base 自带):零声明即用,key 走 export
           DEEPSEEK_API_KEY 或 Web UI 运行时配;参数调 webSearchProviders
-        - "exa":webSearchProviders 声明 exa 后端(非 base 自带,须声明)
-        选中才启用:未选中后端出 disable 行(死卡清理)。前提:上游无
-        运行时 provider 切换(dsh-web 实证,searchProvider 是行 Config
-        非命名空间段,构造器定格;热切出现则改"声明即在",lib.nix 有
-        同步标记)。选择器 id 不在声明表 ∪ {deepseek-official} → 求值期
-        fail-loud。
+        - "exa":webSearchProviders 声明 exa 后端(非 base 自带,须完整
+          声明带 row.name)
+        行渲染为单一 web 行全键重述(patch 整行替换语义:与 webFetch
+        同时选中时两 provider 合并进同一行,searchProvider/fetchProvider
+        互不踩踏)。选择器 id 不在声明表 ∪ {deepseek-official} →
+        求值期 fail-loud;非 base id 用裸 attrs 声明(缺 row.name)同样
+        fail-loud(insert 行与包源无从渲染)。
         已知限制:web face 的 preset 自带 tool-web,patch 层不可达 ——
-        null 时 web 会话的工具卡残留(README 已知限制节)。
+        null 时 web 会话的工具卡残留(README「已知限制」;preset farm
+        重放对 shipped preset 已关闭该逃逸)。
       '';
     };
 
-    # webFetch = fetch 缝的同款选择器形态(缝对称性,README「网页抓取」
-    # 节):search/fetch 两套同构注册表,差异只在生态 —— fetch 缝 rc.6
+    # webFetch = fetch 缝的同款选择器形态(缝对称性,README「网页抓取」):
+    # search/fetch 两套同构注册表,差异只在生态 —— fetch 缝 rc.6
     # 无 base 自带 provider(官方匿名 HTTP provider 因 SSRF 未发布,
     # base 的 tool-web fetch: false 保险丝),故选中必是声明后端,
     # 且须显式打开 tool-web.fetch(模块代劳)
@@ -421,8 +424,9 @@ in
         webSearch 对称)。null(默认)= 禁用:维持 base 现状
         (tool-web fetch: false,fetch 注册表空)。str = 启用并选中
         该 provider id —— 必须在 webFetchProviders 声明表内(fetch
-        缝无 base 自带后端);模块同时重述 tool-web 行 fetch: true
-        (base 的 SSRF 保险丝,委托型 provider 无此面,显式打开)。
+        缝无 base 自带后端);模块重述 tool-web 行
+        { fetch = true; searchTimeoutMs = 60000; }(打开 base 的 SSRF
+        保险丝 + 重述 base 超时键,防整行替换把它打回工具默认 30s)。
         选择器 id 未声明 → 求值期 fail-loud。SSRF 责任在上游规则里
         归 provider:委托型(远端 reader)平凡满足,本机抓取型须自证。
       '';
@@ -499,13 +503,15 @@ in
       '';
       description = ''
         webFetch 后端声明表(开放注册表,镜像 webSearchProviders)。
-        声明 ≠ 启用:仅被 webFetch 选中的后端在场(备案待命)。
+        声明 ≠ 启用:仅被 webFetch 选中的后端在场(insert 行 + 包源;
+        未选中者不出任何行 —— 行从未进树,禁行只会换来 boot 期
+        "entry not found" 警告)。
         webFetch = null × 本表非空 → 求值期 fail-loud(同 webSearch)。
       '';
     };
 
     webSearchProviders = lib.mkOption {
-      # 开放注册表(README:选择器指向的注册表是开放的):
+      # 开放注册表(README「网页搜索」:注册表是开放的):
       # - 裸 attrs = base 自带后端(deepseek-official)的纯参数
       # - 完整声明(带 row.name)= 任意新后端,零 nixdsh 改动:
       #   row.name = cordis 包名;row.id? 缺省 web-search-<尾名>;
@@ -592,10 +598,11 @@ in
       description = ''
         webSearch 后端声明表(开放注册表:选择器指向的注册表开放,
         新后端一条声明接入)。声明 ≠ 启用:仅被 webSearch 选中的后端
-        在场(README:声明必有效,在场或被选择器解释 —— 备案待命,
-        切换只改 webSearch 一个字符串)。渲染约定见各字段;裸 attrs
-        形态 = base 自带后端的纯参数。webSearch = null × 本表非空 →
-        求值期 fail-loud。
+        在场(insert 行 + 包源;未选中者不出任何行 —— 行从未进树,
+        禁行只会换来 boot 期 "entry not found" 警告)。渲染约定见各
+        字段;裸 attrs 形态 = base 自带后端(deepseek-official)的纯
+        参数,非 base id 必须完整声明带 row.name。
+        webSearch = null × 本表非空 → 求值期 fail-loud。
       '';
     };
 
@@ -613,7 +620,7 @@ in
       description = ''
         DeepSeek 官方 LLM 路由(llm-deepseek adapter)。null(默认)= 禁用:
         DEFAULT_MODELS catalog(v4-flash/pro)无条件注册,无 key 即模型
-        选择器死条目,故默认禁(空载荷代价,见 README)。{} = 显式启用
+        选择器死条目,故默认禁(空载荷代价,见 docs/internals.md「设计准则」)。{} = 显式启用
         零配置(key 走 export 或 Web UI 运行时配)。attrs = 启用并渲染进
         settings."llm-deepseek"。与 providers(llm-pi-ai)不互斥:多
         provider 注册表,路由由 defaultModel/settings 选择。
@@ -747,7 +754,7 @@ in
         与 freeform settings 的分工:这里管类型安全与缺省省略,
         settings.llm-pi-ai 仍可写本层未覆盖的任意键。
 
-        nullOr 三态(README 设计准则):{} 默认 = 启用·惰性(空载荷
+        nullOr 三态(docs/internals.md 设计准则):{} 默认 = 启用·惰性(空载荷
         零注册,无可观测面,禁用无收益);null = 禁用(llm-pi-ai 行
         disable 进所有 profile,彻底走 llm-deepseek/其他 adapter 时
         用);null × settings."llm-pi-ai" 有声明或 defaultModel 指向
@@ -856,12 +863,29 @@ in
             example = "liangshen";
             description = ''
               本 face 树的默认 agent preset(渲染为树上 agent-presets
-              行的 default 重述;face 改名自动跟随)。仅交互插件可设
-              (非 face 插件无树 → throw)。未设的树回落全局
-              programs.dsh.defaultPreset。id 枚举校验(求值期
+              行的 default 重述;face 改名自动跟随)。仅**带 roster 行**
+              的交互插件可设(headless 树无 agent-presets 行,设了也无
+              锚 → 求值期 throw;非 face 插件无树同理)。未设的树回落
+              全局 programs.dsh.defaultPreset。id 枚举校验(求值期
               fail-loud):合法集 = shipped ∪ declared ∪ discovered
               —— 与全局项同款,含 excludedPresets 黑名单拒斥
               (黑名单 id 已被踢出 discovered,锚定它 = 矛盾声明)。
+            '';
+          };
+          # roster 舞资格:本 face 的 base 树是否带 agent-presets 行。
+          # 缺省从源元数据推导(in-box 表实测维护 / registry 收录时
+          # roster= 标记);无元数据的源缺省 true(宁可多接管,不可
+          # 静默丢接管)。headless 自动为 false
+          presetRoster = lib.mkOption {
+            type = lib.types.nullOr lib.types.bool;
+            default = null;
+            description = ''
+              本 face 树是否承载 preset roster 接管(两行舞:禁 base
+              agent-presets 行 + 以 farm roots 重插)。缺省(null)从
+              源元数据推导:in-box 表(web-app 有行/headless 无行,store
+              实测)、registry 收录时的 roster= 标记;两者皆无 → true。
+              设 false = 本树不做 preset 接管(默认 preset 值随之为无锚
+              —— defaultPreset 同设会 throw)。
             '';
           };
           permissionMode = lib.mkOption {
@@ -933,7 +957,7 @@ in
               (@{lib.concatStringsSep ", " dshLib.inBoxNames});
               path/package = 第三方插件源(fetchFromGitHub derivation 或
               flake=false input 路径均可,需自带 package.json,
-              可选 dsh.bundle.patch;见 plugins/README.nix)。
+              可选 dsh.bundle.patch;见 plugins/names.txt + update.py)。
             '';
           };
           userPatchesFile = lib.mkOption {
@@ -944,7 +968,10 @@ in
           userPatches = lib.mkOption {
             type = lib.types.listOf lib.types.attrs;
             default = [ ];
-            description = "内联 profile patch 列表(JSON 可序列化;!!js 等用 userPatchesFile)";
+            description = ''
+              内联 profile patch 列表(块式 YAML 渲染;!!js 标签等原生
+              值用 dshLib.rawYaml "!!js process.cwd()" 形态,或整体
+              委托 userPatchesFile)'';
           };
         };
       });
@@ -955,7 +982,7 @@ in
       '';
     };
 
-    # agent 预设(rc.5 dsh-agent-presets 实测):目录 = 预设,id = 目录名,
+    # agent 预设(rc.7 dsh-agent-presets 实测):目录 = 预设,id = 目录名,
     # agent.cordis.yml(组合树)+ preset.yml(显示元数据)+ 任意 .mjs 插件,
     # 纯文件零构建(宿主 loader 负责模块解析,无需 node_modules)。
     # 热发现:运行中新增免重启(每次调用 re-read roots,同 settings.yaml 档)
@@ -1006,7 +1033,7 @@ in
     # tool-bash 基础树启用、被 dsh-tui 的 patch 关掉;用户层是最后一层,
     # enable 双向生效(实测:disabled: false 可反向启用 bundle 关掉的条目)。
     #
-    # 已知条目 id(rc.5 base 树,`dsh --dump-config` 可查全量;第三方 bundle
+    # 已知条目 id(rc.7 base 树,`dsh --dump-config` 可查全量;第三方 bundle
     # 的条目 id 同样可写):
     #   llm-deepseek / llm-pi-ai / web-search-deepseek / timer / hmr /
     #   fs-sandbox / bash-sandbox / pwsh-sandbox / approval / permission /
@@ -1048,14 +1075,14 @@ in
         覆盖。渲染为所有 profile 用户 patch 层的行级 patch(追加在 bundle
         patch 与 typed 插件层之后,同 id 后行胜出)。
 
-        通道选择纪律中的**末选逃生口**(README「插件形态与通道选择」):
+        通道选择纪律中的**末选逃生口**(docs/internals.md「设计准则」):
         引用的行 id 是树解剖词汇,上游重组/face 装卸后漂移。配置承载型
         优先层 1(typed 意图选项)或层 2(settings 命名空间);频繁落在
         这里 = 层 1 缺 typed 选项的信号。
       '';
     };
 
-    # MCP 服务器(rc.5 dsh-mcp-client 实测):插件不在默认树,每 server
+    # MCP 服务器(rc.7 dsh-mcp-client 实测):插件不在默认树,每 server
     # 一行 cordis 行(name @deepseek-ai/dsh-mcp-client),工具暴露为
     # mcp__<serverName>__<tool>。行渲染进所有 profile → 变化走 bundle
     # 指纹重启(web 服务自动跟进)。env/headers 值支持 secretFile 形态

@@ -1,38 +1,65 @@
-# 能力缝域(webSearch/webFetch 选择器):行组正例/负例冲突/fetch 行组/
+# 能力缝域(webSearch/webFetch 选择器):行组正例/负例冲突/双缝组合/
 # secretFile env 桥/三家后端 in-tree 端到端
+# 行组 API:applyPlugins 返回 webSeamRows(web 缝单 owner 全部行)+
+# llmRows(llm 适配器三态行),按 perProfile 同序拼合断言
 { pkgs, dshLib, fx }:
 
 let
   inherit (fx) applyWith inTreeCheck;
 in
 {
-  # webSearch 选择器形态 + 三态:默认全禁/选中 deepseek 零行/选中 exa 出
-  # provider+selector 行+包源/未选中后端禁行/settings 段按选中者渲染。
-  # 一个 check 遍历全部正例(测试指南:同类场景合并)
+  # webSearch/webFetch 三态与行组形状。一个 check 遍历全部正例
+  # (测试指南:同类场景合并):
+  #   默认(双缝 null)→ 骨架禁行 + base 后端禁 + llm-deepseek 禁
+  #   providers null → 追加 llm-pi-ai 禁
+  #   选中 deepseek-official → 零 web 行(base 树行原样)
+  #   选中 exa → deepseek 后端禁 + insert 行 + web 单行重述
+  #   选中 exa+zhipu(双缝)→ web 单行双 provider(A1 回归)+ tool-web
+  #     带超时键(A2 回归)
+  #   fetch-only(zhipu)→ web/tool-web 不禁(fetch 需要它们)+ base
+  #     searchProvider 恒重述
   dsh-capability-rows =
     let
-      # 默认(webSearch null,providers 缺省 {})→ 骨架+base 后端禁,llm-deepseek 禁
-      defaults = (applyWith { }).capabilityPatches;
-      # providers 显式 null → 追加 llm-pi-ai 行
-      piAiOff = (applyWith { providers = null; }).capabilityPatches;
-      # 选中 deepseek-official → 仅 llm-deepseek...不,deepseek 后端行启用,
-      # 剩 llm-deepseek(独立选项,未设)禁
-      selDeepseek = (applyWith { webSearch = "deepseek-official"; }).capabilityPatches;
-      # 选中 exa(声明表有,完整声明带 row.name)→ deepseek 后端禁 +
-      # provider/selector 行 + 包源
+      rowsOf = applied: applied.llmRows ++ applied.webSeamRows;
+      defaults = rowsOf (applyWith { });
+      piAiOff = rowsOf (applyWith { providers = null; });
+      selDeepseek = rowsOf (applyWith { webSearch = "deepseek-official"; });
+      exaDecl = {
+        row = {
+          name = "@tonydua/dsh-web-search-exa";
+          config.apiKeyEnv = "EXA_API_KEY";
+        };
+        settings.numResults = 5;
+      };
       selExa = applyWith {
         webSearch = "exa";
-        webSearchProviders.exa = {
-          row = {
-            name = "@tonydua/dsh-web-search-exa";
-            config.apiKeyEnv = "EXA_API_KEY";
-          };
-          settings.numResults = 5;
-        };
+        webSearchProviders.exa = exaDecl;
       };
-      selExaRows = selExa.capabilityPatches ++ selExa.wsProviderRows ++ selExa.wsSelectorRow;
+      # 双缝组合:A1 踩踏回归(此前两缝各出一行 id="web" 互相整行覆盖)
+      both = applyWith {
+        webSearch = "exa";
+        webSearchProviders.exa = exaDecl;
+        webFetch = "zhipu";
+        webFetchProviders.zhipu.row.name = "@fww/dsh-web-fetch-zhipu";
+      };
+      # fetch-only:webSearch null + webFetch 选中(fetch 依赖 web 行)
+      fetchOnly = applyWith {
+        webFetch = "zhipu";
+        webFetchProviders.zhipu.row.name = "@fww/dsh-web-fetch-zhipu";
+      };
+      # deepseek 搜索 + zhipu fetch:base 行的 searchProvider 也须保住
+      dsAndFetch = applyWith {
+        webSearch = "deepseek-official";
+        webFetch = "zhipu";
+        webFetchProviders.zhipu.row.name = "@fww/dsh-web-fetch-zhipu";
+      };
+      selExaRows = rowsOf selExa;
+      bothRows = rowsOf both;
+      fetchOnlyRows = rowsOf fetchOnly;
+      dsAndFetchRows = rowsOf dsAndFetch;
       capIds = rows: map (r: r.id) rows;
       rowOf = rows: id: builtins.head (pkgs.lib.filter (r: r.id == id) rows);
+      countOf = rows: id: builtins.length (pkgs.lib.filter (r: r.id == id) rows);
       # settings 侧:选中后端 attrs 渲染进对应段;无声明不出段
       st = dshLib.renderSettings {
         settings = { };
@@ -57,15 +84,15 @@ in
       };
     in
     pkgs.runCommand "dsh-capability-rows-check" { } (builtins.deepSeq ([
-      (pkgs.lib.assertMsg (capIds defaults == [ "web" "tool-web" "web-search-deepseek" "llm-deepseek" ])
-        "capability: defaults must emit skeleton+base-backend disable + llm-deepseek (providers default {} stays enabled)")
-      (pkgs.lib.assertMsg (capIds piAiOff == [ "web" "tool-web" "web-search-deepseek" "llm-deepseek" "llm-pi-ai" ])
+      (pkgs.lib.assertMsg (capIds defaults == [ "llm-deepseek" "web" "tool-web" "web-search-deepseek" ])
+        "capability: defaults must emit llm-deepseek + skeleton+base-backend disable rows")
+      (pkgs.lib.assertMsg (capIds piAiOff == [ "llm-deepseek" "llm-pi-ai" "web" "tool-web" "web-search-deepseek" ])
         "capability: providers = null must add the llm-pi-ai disable row")
       (pkgs.lib.assertMsg (builtins.all (r: r.disabled == true) piAiOff)
-        "capability: emitted rows must all carry disabled=true")
+        "capability: emitted skeleton rows must all carry disabled=true")
       (pkgs.lib.assertMsg (capIds selDeepseek == [ "llm-deepseek" ])
         "capability: selecting deepseek-official must emit only the independent llm-deepseek row (tree rows stand)")
-      (pkgs.lib.assertMsg (capIds selExaRows == [ "web-search-deepseek" "llm-deepseek" "web-search-exa" "web" ])
+      (pkgs.lib.assertMsg (capIds selExaRows == [ "llm-deepseek" "web-search-deepseek" "web-search-exa" "web" ])
         "capability: selecting exa must disable deepseek backend + insert exa row + restate web selector")
       (pkgs.lib.assertMsg ((rowOf selExaRows "web-search-exa").name == "@tonydua/dsh-web-search-exa")
         "capability: exa row must reference the community package")
@@ -75,6 +102,21 @@ in
         "capability: web row must restate searchProvider = selected id")
       (pkgs.lib.assertMsg (builtins.length selExa.perProfile.default.extraPlugins == 1)
         "capability: selecting exa must add the package source to every profile")
+      # ── A1 回归:双缝同设,web/tool-web 各恰一行,config 双 provider ──
+      (pkgs.lib.assertMsg (countOf bothRows "web" == 1 && countOf bothRows "tool-web" == 1)
+        "capability: both seams set must emit exactly one web row and one tool-web row (no id stomping)")
+      (pkgs.lib.assertMsg ((rowOf bothRows "web").config == { searchProvider = "exa"; fetchProvider = "zhipu"; })
+        "capability: the single web row must carry BOTH providers (whole-row replacement must not drop either seam)")
+      (pkgs.lib.assertMsg ((rowOf bothRows "tool-web").config == { fetch = true; searchTimeoutMs = 60000; })
+        "capability: tool-web restatement must keep the base searchTimeoutMs (60s search route, not the 30s tool default)")
+      # deepseek 搜索 + fetch:base 的 searchProvider 同样保住
+      (pkgs.lib.assertMsg ((rowOf dsAndFetchRows "web").config == { searchProvider = "deepseek-official"; fetchProvider = "zhipu"; })
+        "capability: base-selected searchProvider must survive the fetch restatement")
+      # ── fetch-only:骨架不禁(fetch 需要行活着),base searchProvider 恒重述 ──
+      (pkgs.lib.assertMsg (countOf fetchOnlyRows "web" == 1 && countOf fetchOnlyRows "tool-web" == 1
+        && (rowOf fetchOnlyRows "web").config == { searchProvider = "deepseek-official"; fetchProvider = "zhipu"; })
+        "capability: fetch-only must keep web/tool-web alive (no skeleton disable) and restate the base searchProvider")
+      # settings 侧
       (pkgs.lib.assertMsg (st ? "web-search-deepseek" && st."web-search-deepseek".maxUses == 3)
         "capability: selected deepseek-official attrs must render into settings.\"web-search-deepseek\"")
       (pkgs.lib.assertMsg (st ? "llm-deepseek" && st."llm-deepseek".thinking == "enabled")
@@ -85,15 +127,24 @@ in
 
   # 三态负例:typed 选项 × inBoxPlugins 显式冲突 / providers=null × settings
   # 声明 / llmDeepseek=null × defaultModel 指向 deepseek-official /
-  # webSearch 未知 id / 能力禁 × 声明表非空 → eval throw。
-  # tryEval 只到 WHNF,throw 在 applyPlugins 内部 → deepSeq 强制(实测先例)
+  # webSearch 未知 id / 裸 attrs 声明非 base id / 能力禁 × 声明表非空 → eval throw。
+  # deepSeq applied:set 全域强制(各域断言 seq 在域结果内,deepSeq 必达);
+  # 旧的 `f { }` 调用模式依赖"set WHNF 先强制外层断言链"的巧合,且
+  # 顶层用 seq(列表 WHNF 不强推元素)会让整组断言空洞 —— 双双废弃
   dsh-capability-clash =
     let
-      tryThrow = f: msg:
-        let res = builtins.tryEval (builtins.deepSeq (f { }) null);
+      forceDomains = a:
+        builtins.seq (a.facePlugins or null)
+        (builtins.seq (a.webSeamRows or null)
+        (builtins.seq (a.llmRows or null)
+        (builtins.seq (a.mcpPatches or null)
+        (builtins.seq (a.presetFarm or null)
+        (builtins.seq (a.perProfile or null) null)))));
+      tryThrow = applied: msg:
+        let res = builtins.tryEval (forceDomains applied);
         in pkgs.lib.assertMsg (!res.success) msg;
     in
-    pkgs.runCommand "dsh-capability-clash-check" { } (builtins.seq ([
+    pkgs.runCommand "dsh-capability-clash-check" { } (builtins.deepSeq ([
       (tryThrow (applyWith {
         webSearch = "deepseek-official";
         inBoxPlugins."web-search-deepseek".enable = false;
@@ -119,18 +170,23 @@ in
       (tryThrow (applyWith {
         webSearch = "exa";
       }) "capability: webSearch = exa without a webSearchProviders.exa declaration must throw (not a base backend)")
+      # 非 base id 用裸 attrs 声明:无 insert 行/无包源 → fail-loud
+      (tryThrow (applyWith {
+        webSearch = "exa";
+        webSearchProviders.exa.maxUses = 3;
+      }) "capability: webSearch = exa declared as bare attrs (no row.name) must throw (no insert row or package source could be rendered)")
       (tryThrow (applyWith {
         webSearch = null;
         webSearchProviders.exa = {
           row.name = "@tonydua/dsh-web-search-exa";
         };
       }) "capability: webSearchProviders non-empty + webSearch = null must throw (declared backends would never run)")
-      # secretFile 冲突:两个 providers 声明派生同一 env 但文件不同 → throw
-      (tryThrow (_: dshLib.secretEnv {
+      # secretFile 冲突:同 env(X_KEY ← 文件名大写约定)不同文件 → throw
+      (tryThrow (dshLib.secretEnv {
         cfg = {
           providers = {
             a.secretFile = "/run/secrets/x_key";
-            b.secretFile = "/run/secrets/other_x_key";
+            b.secretFile = "/run/secrets/elsewhere/x_key";
           };
         };
       }) "secretEnv: same derived env from different files must throw")
@@ -150,8 +206,9 @@ in
     ]) "touch $out");
 
   # fetch 缝行组正例:选中 zhipu fetch 后端 → insert 行 + web 行
-  # fetchProvider 重述 + tool-web fetch:true 保险丝打开;未选中后端禁行;
-  # 包源进 profile。负例(未知 id/表非空×null/inBox 禁 tool-web)进 clash
+  # fetchProvider 重述 + tool-web {fetch:true, searchTimeoutMs:60000};
+  # 未选中后端**零行**(行从未进树,禁行只会换 boot 警告);包源进
+  # profile。负例(未知 id/表非空×null/inBox 禁 tool-web)进 clash
   dsh-fetch-rows =
     let
       sel = applyWith {
@@ -163,7 +220,7 @@ in
           };
         };
       };
-      # 备案:两个后端声明,选中其一 → 另一禁行
+      # 备案:两个后端声明,选中其一 → 另一零行(A7 幽灵禁行回归)
       both = applyWith {
         webFetch = "zhipu";
         webFetchProviders = {
@@ -171,9 +228,10 @@ in
           other.row.name = "@example/dsh-web-fetch-other";
         };
       };
-      rows = sel.wfRows;
+      rows = sel.llmRows ++ sel.webSeamRows;
       rowOf = id: builtins.head (pkgs.lib.filter (r: r.id == id) rows);
-      bothIds = map (r: r.id) both.wfRows;
+      bothRows = both.llmRows ++ both.webSeamRows;
+      anyOtherRows = pkgs.lib.filter (r: r.id == "web-fetch-other" || r ? disabled && r.id == "web") bothRows;
       st = dshLib.renderSettings {
         settings = { };
         telemetry = { mode = null; };
@@ -188,19 +246,18 @@ in
         providers = { };
         defaultModel = null;
       };
-      bothDisabled = map (r: r.id) (pkgs.lib.filter (r: r ? disabled) both.wfRows);
     in
     pkgs.runCommand "dsh-fetch-rows-check" { } (builtins.deepSeq ([
-      (pkgs.lib.assertMsg ((map (r: r.id) rows) == [ "web-fetch-zhipu" "web" "tool-web" ])
-        "fetch: selecting zhipu must emit insert row + web fetchProvider restatement + tool-web fetch:true fuse")
+      (pkgs.lib.assertMsg ((map (r: r.id) rows) == [ "llm-deepseek" "web-search-deepseek" "web-fetch-zhipu" "web" "tool-web" ])
+        "fetch: selecting zhipu (fetch-only) must emit backend insert + full web/tool-web restatements; web-search-deepseek stays disabled (search off)")
       (pkgs.lib.assertMsg ((rowOf "web-fetch-zhipu").config.apiKeyEnv == "ZHIPU_API_KEY")
         "fetch: row.secretFile must derive apiKeyEnv (uppercase filename convention)")
-      (pkgs.lib.assertMsg ((rowOf "web").config.fetchProvider == "zhipu")
-        "fetch: web row must restate fetchProvider = selected id")
-      (pkgs.lib.assertMsg ((rowOf "tool-web").config.fetch == true)
-        "fetch: tool-web row must restate fetch: true (base SSRF fuse, delegated provider)")
-      (pkgs.lib.assertMsg (bothDisabled == [ "web-fetch-other" ])
-        "fetch: unselected declared backend must get a disable row")
+      (pkgs.lib.assertMsg ((rowOf "web").config == { searchProvider = "deepseek-official"; fetchProvider = "zhipu"; })
+        "fetch: web row must restate fetchProvider and keep the base searchProvider")
+      (pkgs.lib.assertMsg ((rowOf "tool-web").config == { fetch = true; searchTimeoutMs = 60000; })
+        "fetch: tool-web row must restate fetch: true WITH the base searchTimeoutMs (base SSRF fuse + timeout key)")
+      (pkgs.lib.assertMsg (anyOtherRows == [ ])
+        "fetch: unselected declared backend must emit NO row (never in tree — a disable row is a boot-time ghost warning)")
       (pkgs.lib.assertMsg (builtins.length sel.perProfile.default.extraPlugins == 1)
         "fetch: selecting zhipu must add the package source to every profile")
       (pkgs.lib.assertMsg (st ? "web-fetch-zhipu" && st."web-fetch-zhipu".returnFormat == "text")
@@ -222,7 +279,7 @@ in
         };
       };
       exaRow = builtins.head
-        (pkgs.lib.filter (r: r.id == "web-search-exa") applied.wsProviderRows);
+        (pkgs.lib.filter (r: r.id == "web-search-exa") applied.webSeamRows);
       # providers 侧:显式 apiKeyEnv + secretFile(经典配对)
       st = dshLib.renderSettings {
         settings = { };
@@ -311,8 +368,8 @@ in
     ]) "touch $out");
 
   # exa 后端端到端:选中 exa 的 profile bundle 真 boot,web-search-exa 条目
-  # 须进组合树(insert 生效而非 warn-skip)且 deepseek 后端行被禁。
-  # registry 真包构建(peers 链接齐)→ 这是全链验证(构建级)
+  # 须进组合树(insert 生效而非 warn-skip)且全 log 零 "not found" 警告
+  # (幽灵禁行回归)。registry 真包构建(peers 链接齐)→ 全链验证
   dsh-exa-in-tree = inTreeCheck {
     checkName = "dsh-exa-in-tree-check";
     profileName = "exa-tree";
@@ -324,6 +381,9 @@ in
         config.apiKeyEnv = "EXA_API_KEY";
       };
     };
+    extraGreps = [
+      ''! grep -q 'not found' "$TMPDIR/dump.log"''
+    ];
   };
 
   # zhipu 后端端到端(同 exa 同构):选中 zhipu 的 profile 真 boot,
@@ -341,6 +401,7 @@ in
     };
     extraGreps = [
       ''grep -q 'zhipu' "$TMPDIR/dump.log" && grep -q 'searchProvider' "$TMPDIR/dump.log"''
+      ''! grep -q 'not found' "$TMPDIR/dump.log"''
     ];
   };
 
@@ -358,12 +419,40 @@ in
     };
     extraGreps = [
       ''grep -q 'fetchProvider: zhipu' "$TMPDIR/dump.log"''
+      ''! grep -q 'not found' "$TMPDIR/dump.log"''
     ];
   };
 
-  # roster 接管(两行舞):face 树得到 disable+insert 行(default 进新行
-  # config,roots 指向 farm)+ headless/手写树零行 + settings 恒无
-  # agent-presets 段 + 负例(非 face 设值 / freeform 冲突 / 未知 id)
+  # 双缝组合真 boot(A1 端到端):exa 搜索 + zhipu 抓取同设 → dump 里
+  # 两个 provider 都在 web 行上,tool-web fetch: true 且 searchTimeoutMs
+  # 保留(A2),零幽灵警告
+  dsh-both-seams-in-tree = inTreeCheck {
+    checkName = "dsh-both-seams-in-tree-check";
+    profileName = "both-tree";
+    entryId = "web-search-exa";
+    cfg = {
+      webSearch = "exa";
+      webSearchProviders.exa.row = {
+        name = "@tonydua/dsh-web-search-exa";
+        config.apiKeyEnv = "EXA_API_KEY";
+      };
+      webFetch = "zhipu";
+      webFetchProviders.zhipu.row = {
+        name = "@fww/dsh-web-fetch-zhipu";
+        config.apiKeyEnv = "ZHIPU_API_KEY";
+      };
+    };
+    extraGreps = [
+      ''grep -q 'searchProvider: exa' "$TMPDIR/dump.log" && grep -q 'fetchProvider: zhipu' "$TMPDIR/dump.log"''
+      ''grep -A4 'id: tool-web' "$TMPDIR/dump.log" | grep -q 'searchTimeoutMs: 60000' ''
+      ''! grep -q 'not found' "$TMPDIR/dump.log"''
+    ];
+  };
+
+  # roster 接管(两行舞):资格 face 树得到 disable+insert 行(default 进
+  # 新行 config,roots 指向 farm)+ headless/手写树零行 + settings 恒无
+  # agent-presets 段 + 负例(非 face 设值 / 无资格 face 设值 / freeform
+  # 冲突 / 未知 id)
   dsh-default-preset =
     let
       mk = cfg: applyWith cfg;
@@ -382,27 +471,43 @@ in
             enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
             profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
           };
+          # headless:face 但 base 无 agent-presets 行(in-box roster=false)
+          # → 无舞行(A7 回归),设 defaultPreset → throw
+          "headless" = {
+            enable = true; face = null; source = null; profiles = [ ];
+            settings = { }; patches = [ ]; patchId = null;
+          };
         };
       });
       tuiRows = both.perProfile.tui.extraPatches;
       webRows = both.perProfile.web.extraPatches;
-      headlessRows = both.perProfile.default.extraPatches;
+      headlessRows = both.perProfile.headless.extraPatches;
       insertRowOf = rows:
         builtins.head (pkgs.lib.concatMap (r: if r ? insert then r.insert else [ ]) rows);
       disableRowOf = rows: id:
         pkgs.lib.filter (r: r.id or null == id && r.disabled or false) rows;
       # 未设任何 → 行仍在(default 回落 standard,与 base 行原值同)
       none = mk { plugins = { }; };
-      # 负例
-      tryThrow = f: msg:
-        let res = builtins.tryEval (builtins.deepSeq (f { }) null);
+      # 负例:逐域 seq 强制(各域断言 seq 在域结果头部,WHNF 即达;
+      # deepSeq 会连 derivation 内部深强制 → 栈溢出,不采用)
+      forceDomains = a:
+        builtins.seq (a.facePlugins or null)
+        (builtins.seq (a.webSeamRows or null)
+        (builtins.seq (a.llmRows or null)
+        (builtins.seq (a.mcpPatches or null)
+        (builtins.seq (a.mcpSecretRefs or null)
+        (builtins.seq (a.presetFarm or null)
+        (builtins.seq (a.inBoxPatches or null)
+        (builtins.seq (a.perProfile or null) null)))))));
+      tryThrow = applied': msg:
+        let res = builtins.tryEval (forceDomains applied');
         in pkgs.lib.assertMsg (!res.success) msg;
       assert' = c: m: pkgs.lib.assertMsg c m;
     in
     pkgs.runCommand "dsh-default-preset-check" { } (builtins.deepSeq ([
-      # tui 树:两行舞(default=per-face 值;roots=farm,trust system)
+      # tui 树(registry roster=true):两行舞(default=per-face 值;roots=farm)
       (assert' (builtins.length (disableRowOf tuiRows "agent-presets") == 1)
-        "roster: base agent-presets row must be disabled on face trees")
+        "roster: base agent-presets row must be disabled on roster-eligible face trees")
       (assert' ((insertRowOf tuiRows).id == "agent-presets-nix")
         "roster: replacement instance must insert under a distinct id")
       (assert' ((insertRowOf tuiRows).config.default == "liangshen")
@@ -410,13 +515,14 @@ in
       (assert' ((insertRowOf tuiRows).config.roots == [
         { path = both.presetFarm; trust = "system"; }
       ]) "roster: roots must point at the farm with system trust")
-      # web 树:未设 per-face → 回落全局 custom-standard
+      # web 树(in-box roster=true):未设 per-face → 回落全局 custom-standard
       (assert' ((insertRowOf webRows).config.default == "custom-standard")
         "roster: unset face must fall back to the global defaultPreset")
-      # headless/手写树:零舞行(无 roster 语义,不引入服务)
+      # headless 树(in-box roster=false):零舞行 —— 无 base 行的树出舞
+      # = 幽灵禁行警告 + 注入 preset 服务(A7 回归)
       (assert' (disableRowOf headlessRows "agent-presets" == [ ]
         && pkgs.lib.filter (r: r ? insert && (builtins.head r.insert).id or null == "agent-presets-nix") headlessRows == [ ])
-        "roster: non-face trees must not receive the dance")
+        "roster: headless (no base agent-presets row) must not receive the dance")
       # 未设任何:舞行仍在,default 回落 standard(base 行原值同)
       (let webNone = (mk { plugins."web-app" = {
               enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
@@ -440,6 +546,13 @@ in
           defaultPreset = "x";
         };
       }) "roster: defaultPreset on a non-face plugin must throw")
+      (tryThrow (mk {
+        plugins.headless = {
+          enable = true; face = null; source = null; profiles = [ ];
+          settings = { }; patches = [ ]; patchId = null;
+          defaultPreset = "standard";
+        };
+      }) "roster: defaultPreset on a roster-ineligible face (headless) must throw (no anchor)")
       (tryThrow (mk {
         defaultPreset = "standard"; # 已知 id:throw 只可能来自 freeform 冲突
         settings."agent-presets".default = "manual";
@@ -469,8 +582,9 @@ in
 
   # roster 接管 boot 级端到端:真 web 树(base+web-app)+ 舞行 →
   # dump-config:agent-presets 禁 / agent-presets-nix 进树带 farm roots;
-  # farm 内容:shipped standard 已重放(webFetch 选中 → fetch: true 进
-  # shipped —— 手选逃逸关闭的铁证),minimal 原样(no-op 重放)
+  # farm 内容:shipped standard 已重放(webFetch 选中 → fetch: true +
+  # searchTimeoutMs 60000 进 shipped —— 手选逃逸关闭 + 超时键保留的
+  # 铁证),minimal 原样(no-op 重放);全 log 零 "not found"(A7)
   dsh-roster-boot =
     let
       cfg' = {
@@ -507,50 +621,62 @@ in
       # dump 按字母序渲染键:config(含 roots)在 id 行之前
       grep -B8 'id: agent-presets-nix' "$TMPDIR/dump.log" | grep -q "${farm}" || { cat "$TMPDIR/dump.log" >&2; echo "farm roots missing" >&2; exit 1; }
       ! grep -q 'entry "agent-presets-nix" not found' "$TMPDIR/dump.log" || { cat "$TMPDIR/dump.log" >&2; exit 1; }
-      # farm 实然:shipped standard 的 fetch 已重放为 true;minimal 无
-      # tool-web 行 → no-op(yq 不炸,原样)
+      ! grep -q 'not found' "$TMPDIR/dump.log" || { cat "$TMPDIR/dump.log" >&2; echo "ghost disable rows leaked warnings" >&2; exit 1; }
+      # farm 实然:shipped standard 的 fetch 已重放为 true 且超时键保留;
+      # minimal 无 tool-web 行 → no-op(yq 不炸,原样)
       grep -q 'fetch: true' "${farm}/standard/agent.cordis.yml" || { echo "farm standard not replayed" >&2; exit 1; }
+      grep -q 'searchTimeoutMs: 60000' "${farm}/standard/agent.cordis.yml" || { echo "farm standard lost searchTimeoutMs" >&2; exit 1; }
       test -f "${farm}/minimal/agent.cordis.yml" || { echo "farm minimal missing" >&2; exit 1; }
       touch $out
     '';
 
-  # permission read-only boot 级端到端:真 web 树 + 全局 read-only 三行
-  # (表接管进 permission 行 config)→ dump-config 不炸构造期 resolve
-  # (修前:unknown preset "read-only" 于服务构造处 throw)
+  # permission boot 级端到端:三模式遍历(read-only 表接管进 permission
+  # 行 config;workspace-write/danger-full-access 恒带整表 —— A4 回归:
+  # 运行期切 read-only 显示 custom 而非 named preset)→ dump-config
+  # 不炸构造期 resolve,dump 里 presets 表三键在场
   dsh-permission-boot =
     let
-      cfg' = {
-        permissionMode = "read-only";
-        plugins."web-app" = {
-          enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
-          profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
-        };
-      };
-      applied' = applyWith cfg';
-      inc = applied'.perProfile.web;
-      bundle = dshLib.buildProfile {
-        inherit pkgs;
-        profile = dshLib.mkProfile {
-          name = "web";
-          plugins = [ "@deepseek-ai/dsh-base" "@deepseek-ai/dsh-web-app" ] ++ inc.extraPlugins;
-          userPatchesFile = null;
-          userPatches = inc.extraPatches;
-        };
-      };
+      mkBoot = mode:
+        let
+          applied' = applyWith {
+            permissionMode = mode;
+            plugins."web-app" = {
+              enable = true; face = null; source = "@deepseek-ai/dsh-web-app";
+              profiles = [ ]; settings = { }; patches = [ ]; patchId = null;
+            };
+          };
+          inc = applied'.perProfile.web;
+          bundle = dshLib.buildProfile {
+            inherit pkgs;
+            profile = dshLib.mkProfile {
+              name = "web";
+              plugins = [ "@deepseek-ai/dsh-base" "@deepseek-ai/dsh-web-app" ] ++ inc.extraPlugins;
+              userPatchesFile = null;
+              userPatches = inc.extraPatches;
+            };
+          };
+        in
+        ''
+          ${fx.materialize "web" bundle}
+          ${pkgs.dsh}/bin/dsh --profile web --dump-config > "$TMPDIR/dump-${mode}.log" 2>&1 \
+            || { cat "$TMPDIR/dump-${mode}.log" >&2; exit 1; }
+          ! grep -q 'unknown preset' "$TMPDIR/dump-${mode}.log" \
+            || { cat "$TMPDIR/dump-${mode}.log" >&2; echo "permission table takeover failed (${mode})" >&2; exit 1; }
+          # 整表接管:read-only 在场(A4:此前非 read-only 分支丢表 →
+          # 运行期切 read-only 显示 custom)
+          grep -q 'read-only' "$TMPDIR/dump-${mode}.log" \
+            || { cat "$TMPDIR/dump-${mode}.log" >&2; echo "read-only preset missing from dump (${mode})" >&2; exit 1; }
+        '';
     in
     pkgs.runCommand "dsh-permission-boot-check" { } ''
-      ${fx.materialize "web" bundle}
-      ${pkgs.dsh}/bin/dsh --profile web --dump-config > "$TMPDIR/dump.log" 2>&1 \
-        || { cat "$TMPDIR/dump.log" >&2; exit 1; }
-      ! grep -q 'unknown preset' "$TMPDIR/dump.log" \
-        || { cat "$TMPDIR/dump.log" >&2; echo "permission table takeover failed" >&2; exit 1; }
-      # 表接管后 read-only 是命名 preset:defaultPreset 解析成功且入 dump
-      grep -q 'read-only' "$TMPDIR/dump.log" \
-        || { cat "$TMPDIR/dump.log" >&2; echo "read-only missing from dump" >&2; exit 1; }
+      ${mkBoot "read-only"}
+      ${mkBoot "workspace-write"}
+      ${mkBoot "danger-full-access"}
       touch $out
     '';
 
-  # 权限模式:三行同步渲染 + per-face 胜全局(later-wins)+ 负例
+  # 权限模式:三行同步渲染 + per-face 胜全局(later-wins)+ 整表恒带
+  # (A4 回归)+ workspaceRoot raw 重述(A3 回归)+ 负例
   dsh-permission-mode =
     let
       mk = cfg: applyWith cfg;
@@ -575,8 +701,15 @@ in
       # 未设任何 → 零行(维持 base 现状)
       none = mk { plugins = { }; };
       # 负例:非 face 插件设值
-      tryThrow = f: msg:
-        let res = builtins.tryEval (builtins.deepSeq (f { }) null);
+      forceDomains = a:
+        builtins.seq (a.facePlugins or null)
+        (builtins.seq (a.webSeamRows or null)
+        (builtins.seq (a.llmRows or null)
+        (builtins.seq (a.mcpPatches or null)
+        (builtins.seq (a.presetFarm or null)
+        (builtins.seq (a.perProfile or null) null)))));
+      tryThrow = applied: msg:
+        let res = builtins.tryEval (forceDomains applied);
         in pkgs.lib.assertMsg (!res.success) msg;
       assert' = c: m: pkgs.lib.assertMsg c m;
     in
@@ -584,27 +717,30 @@ in
       # tui 树:per-face read-only 三行(later-wins 胜全局)
       (assert' ((lastOf tuiRows "sandbox-policy").config.mode == "read-only")
         "permission-mode: per-face mode must win on its tree")
+      (assert' ((lastOf tuiRows "sandbox-policy").config.workspaceRoot.__rawYaml == "!!js process.cwd()")
+        "permission-mode: sandbox-policy restatement must carry the base workspaceRoot raw value (whole-row discipline)")
       (assert' ((lastOf tuiRows "approval").config.policy == "ask")
-        "permission-mode: read-only approval policy must be ask")
+        "permission-mode: read-only approval policy must stay ask")
       (assert' ((lastOf tuiRows "permission").config.defaultPreset == "read-only")
         "permission-mode: permission.defaultPreset must stay in sync")
-      # read-only 非上游 preset → 行 config 须整表接管(上游两条镜像 +
-      # read-only 条目);负载键 sandbox/approval 与上游常量一致
+      # 整表恒带:三键镜像(base 同形,仅负载键;A4 + 去镜像文案键)
       (let perm = (lastOf tuiRows "permission").config; in
         assert' (perm ? presets
           && builtins.attrNames perm.presets == [ "danger-full-access" "read-only" "workspace-write" ]
           && perm.presets.read-only.sandbox == "read-only"
           && perm.presets.read-only.approval == "ask"
           && perm.presets."workspace-write".approval == "ask"
-          && perm.presets."danger-full-access".approval == "never")
-          "permission-mode: read-only needs full-table takeover in the permission row")
-      # web 树:回落全局 workspace-write
+          && perm.presets."danger-full-access".approval == "never"
+          && !(perm.presets.read-only ? name))
+          "permission-mode: the permission row must always restate the full presets table (base parity, load-bearing keys only)")
+      # web 树:回落全局 workspace-write —— 同样恒带表(修前非 read-only
+      # 分支丢表 → 运行期切 read-only 显示 custom)
       (assert' ((lastOf webRows "sandbox-policy").config.mode == "workspace-write")
         "permission-mode: unset face must fall back to the global value")
       (assert' ((lastOf webRows "approval").config.policy == "ask"
           && (lastOf webRows "permission").config.defaultPreset == "workspace-write"
-          && !((lastOf webRows "permission").config ? presets))
-        "permission-mode: web tree rows must stay in sync (no table takeover for real presets)")
+          && ((lastOf webRows "permission").config ? presets))
+        "permission-mode: web tree rows must stay in sync AND restate the full table (uniform)")
       # danger-full-access → approval never(与上游 env 公式同构)
       (let danger = mk {
               permissionMode = "danger-full-access";
@@ -671,8 +807,15 @@ in
       disabled = mk { subagents.sleeper = { enable = false; }; };
       none = mk { };
       # 负例三连(fixture 无 module system,enable 显式给)
-      tryThrow = f: msg:
-        let res = builtins.tryEval (builtins.deepSeq (f { }) null);
+      forceDomains = a:
+        builtins.seq (a.facePlugins or null)
+        (builtins.seq (a.webSeamRows or null)
+        (builtins.seq (a.llmRows or null)
+        (builtins.seq (a.mcpPatches or null)
+        (builtins.seq (a.presetFarm or null)
+        (builtins.seq (a.perProfile or null) null)))));
+      tryThrow = applied: msg:
+        let res = builtins.tryEval (forceDomains applied);
         in pkgs.lib.assertMsg (!res.success) msg;
       assert' = c: m: pkgs.lib.assertMsg c m;
     in

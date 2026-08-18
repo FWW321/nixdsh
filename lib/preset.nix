@@ -16,17 +16,18 @@
 # 保留此可能,不依赖它。
 #
 # 机制(与 profile 的 base+userPatches 同构):
-#   - rows = 能力选项渲染的行组(applyPlugins 单一事实源;当前 =
-#     wfRows 的 fetch:true 保险丝行等)。yq 按 id 匹配改写 config 键
+#   - rows = 能力选项渲染的行组(applyPlugins 单一事实源;= web 缝的
+#     web/tool-web 重述行等)。yq 按 id 匹配改写 config 键
 #     (幂等;行不在 preset 里 → 无操作 —— minimal 无 tool-web 行是
-#     身份语义,不 insert)
+#     身份语义,不 insert)。rawYaml 值(!!js 标签)无法经 yq 赋值链
+#     表达 → fail-loud 拒收(此类行本就不该进 preset 重放面)
 #   - 剥 .dsh-tui-managed.json:tui 的 ensurePackagedPresets 以 marker
 #     认领用户目录(有 marker → staged 替换,改写丢失;无 marker →
 #     conflict 永不碰)。剥掉后所有权彻底归声明方,升级 = source 路径
 #     变 = stamp 变 = 重物化重放
 #   - 改写增/删/改 → 产物 store 路径变 → activation 重物化:删除自动
 #     清理是 derivation 物化的属性,不是扫描修正
-{ lib }:
+{ lib, isRawYaml }:
 
 let
   # pnpm deploy 布局:shipped preset 根(shippedPreset/shippedPresetNames/
@@ -204,11 +205,15 @@ rec
     { pkgs, source, rows ? [ ] }:
     let
       # 每行渲染为 yq 赋值链:行内 config 各键一个赋值(键值对序列;
-      # select(.id == X) 无匹配 → 赋值无操作,yq 不炸)
+      # select(.id == X) 无匹配 → 赋值无操作,yq 不炸)。rawYaml 值
+      # (raw !!js 标签)走不了 toJSON 赋值 → fail-loud 拒收
       rowExpr = row:
         let
           kv = lib.mapAttrsToList
-            (k: v: ''(.[] | select(.id == "${row.id}") | .config.${k}) = ${builtins.toJSON v}'')
+            (k: v:
+              if isRawYaml v then
+                throw "nixdsh: raw YAML values cannot be replayed into presets via yq (row '${row.id}' key '${k}') — raw rows belong to the profile patch layer only"
+              else ''(.[] | select(.id == "${row.id}") | .config.${k}) = ${builtins.toJSON v}'')
             (row.config or { });
         in
         concatStringsSep " | " kv;

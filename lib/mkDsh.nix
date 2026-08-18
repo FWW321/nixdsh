@@ -18,8 +18,10 @@ let
         ] ++ modules;
       };
       cfg = evaluated.config.programs.dsh;
-      wrapper = renderWrapper { inherit cfg pkgs; };
+      # 单次求值,wrapper 与 profileBundles 共用(renderWrapper 接受
+      # applied 参数,不再内部重算)
       applied = applyPlugins { inherit cfg pkgs; };
+      wrapper = renderWrapper { inherit cfg pkgs applied; };
       allProfiles = cfg.profiles // applied.facePlugins;
       withPlugins = name: p:
         let inc = applied.perProfile.${name} or { extraPlugins = [ ]; extraPatches = [ ]; }; in

@@ -25,9 +25,10 @@ let
   # --profile <profile>);名单 = 手写 profiles + 自动 face,用户零声明。
   # 不再生成 per-profile wrapper(dsh-<face> 等):子命令分发等价,独立
   # wrapper 只是 $PATH 噪音;短命令需求由 shell alias 承担。
-  # 撞上游子命令(web 除外)在 renderWrapper 层 eval 期 throw
+  # 撞上游子命令(web 除外)在 renderWrapper 层 eval 期 throw。
+  # applied 复用上方单次求值结果(renderWrapper 不再内部重算)
   mainWrapper = dshLib.renderWrapper {
-    inherit cfg pkgs;
+    inherit cfg pkgs applied;
     name = cfg.binName;
     subcommands = lib.attrNames allProfiles;
   };
