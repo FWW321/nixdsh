@@ -243,8 +243,11 @@ programs.dsh.presets.liangshen-custom.source = ./presets/liangshen-custom;
 
 - 声明的 preset 进 farm(roster 根,**零 activation 物化**,store 只读)
 - **插件托管的 preset 零声明**:`plugins.dsh-tui.enable` 即自动发现
-  接管(如 liangshen),随插件生命周期;撞名显式胜;黑名单
-  `plugins.<name>.excludedPresets`,全禁 `plugins.<name>.presets = false`
+  接管(如 liangshen),随插件生命周期;撞名显式胜;`excludedPresets`
+  = **彻底移除**(构建期从插件源物理剥离 —— farm 无从接管、dsh-tui
+  的播种器无从种出、菜单不可见不可选;user 根已播种的历史副本需
+  一次性手动删除,删后不再生);全禁接管但保留上游播种原件用
+  `plugins.<name>.presets = false`
 - **import 工作流**:TUI 创造模式做原型(`~/.config/deepseek-harness/
   .agent-presets/<名>`,user 根热发现)→ `cp -r` 进 config 仓库 → 声明
 - **勿导入插件 shipped 的预设**(辨别:副本目录里有

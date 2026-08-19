@@ -55,6 +55,10 @@ let
       # 路径以仓库根为基准;当前唯一用例(dsh-TUI)包根 = 仓库根(无
       # subpath),两者并存时须改为相对包根解析
       submodules = e.submodules or [ ];
+      # excludedPresets 的物理实现:preset 目录从源树剥离(构建期)。
+      # 播种器(dsh-tui ensurePackagedPresets 只认包内 presets/)、
+      # 发现扫描、roster 全部无从看见 —— 黑名单 = 不存在
+      stripPresets = e.stripPresets or [ ];
       subTrees = map (s: rec {
         inherit (s) path;
         src = fetchFromGitHub { inherit (s) owner repo rev hash; };
@@ -145,6 +149,16 @@ let
 
       installPhase = ''
         runHook preInstall
+        # preset 剥离(eval 期已按 shipped 集校验过;此处二次防御,
+        # 覆盖无 passthru 元数据的路径):目录物理删除,含失败即炸
+        ${lib.concatMapStrings (id: ''
+          if [ -e "presets/${id}" ] || [ -L "presets/${id}" ]; then
+            rm -rf "presets/${id}"
+          else
+            echo "stripPresets: plugin ships no preset '${id}' in presets/ — typo, or stale after upstream drop?" >&2
+            exit 1
+          fi
+        '') stripPresets}
         # 子模块的构建工具链(tsdown/typescript)不入运行时产物
         # (@dsh-std/* 零运行时依赖,留下的 lib/ + 源内数据即全部)
         ${lib.concatMapStrings (t: ''
@@ -172,7 +186,12 @@ let
         # face 树是否带 base agent-presets 行(roster 舞资格;update.py
         # roster= 尾参物化,收录时探测)
         dshRoster = e.roster or null;
-        dshPresets = e.dshPresets or [ ];
+        # 剥离后的托管 preset 集(发现扫描消费);shipped 集留档供
+        # excludedPresets 校验(拼错/上游已删 → eval throw)
+        dshPresets = lib.subtractLists stripPresets (e.dshPresets or [ ]);
+        dshPresetsShipped = e.dshPresets or [ ];
+        # 再剥离入口:registry 层 excludedPresets 消费(源 derivation 复制派生)
+        stripPresets = ids: buildPlugin name (e // { stripPresets = ids; });
       };
 
       meta = with lib; {
@@ -183,6 +202,9 @@ let
 
   plainPlugin =
     name: e:
+    let
+      stripPresets = e.stripPresets or [ ];
+    in
     runCommand "dsh-plugin-${name}"
       {
         passthru = {
@@ -190,7 +212,9 @@ let
           dshBundlePatch = e.bundlePatch or null;
           dshFace = e.face or null;
           dshRoster = e.roster or null;
-          dshPresets = e.dshPresets or [ ];
+          dshPresets = lib.subtractLists stripPresets (e.dshPresets or [ ]);
+          dshPresetsShipped = e.dshPresets or [ ];
+          stripPresets = ids: plainPlugin name (e // { stripPresets = ids; });
         };
         meta = with lib; {
           description = "dsh plugin source: ${e.owner}/${e.repo}@${e.version}";
@@ -208,6 +232,15 @@ let
           hash = e.hash;
         }}${lib.optionalString (e ? subpath) "/${e.subpath}"}/. "$out"
         chmod -R u+w "$out"
+        # preset 剥离(同 buildPlugin:物理删除,fail-loud)
+        ${lib.concatMapStrings (id: ''
+          if [ -e "$out/presets/${id}" ] || [ -L "$out/presets/${id}" ]; then
+            rm -rf "$out/presets/${id}"
+          else
+            echo "stripPresets: plugin ships no preset '${id}' in presets/ — typo, or stale after upstream drop?" >&2
+            exit 1
+          fi
+        '') stripPresets}
         ${lib.optionalString (hostDsh != null) (linkPeers (e.peers or [ ]))}
       '';
 in

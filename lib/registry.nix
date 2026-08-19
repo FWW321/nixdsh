@@ -11,7 +11,9 @@
 
 let
   inherit (lib)
+    concatMapStrings
     concatStringsSep
+    filter
     filterAttrs
     last
     splitString
@@ -35,21 +37,80 @@ let
     else if builtins.length ns == 1 then table.${builtins.head ns}
     else throw "programs.dsh.plugins.${name}: registry tail-name lookup is ambiguous (${concatStringsSep ", " ns}); set source explicitly";
 
+  # excludedPresets → 源级剥离(**黑名单 = 不存在**的物理实现):preset
+  # 目录从插件源移除(构建期),播种器(ensurePackagedPresets 只认包内
+  # presets/)、发现扫描、roster 全链无从看见。eval 期按 shipped 集校验
+  # (拼错/上游已删 → throw);registry derivation 走 overlay 的再剥离
+  # 入口,path 源走可写副本剥离
+  withPresetsExcluded = pkgs: name: p: src:
+    let
+      excluded = p.excludedPresets or [ ];
+      shippedOf = s:
+        if builtins.pathExists "${toString s}/presets" then
+          builtins.attrNames (builtins.readDir "${toString s}/presets")
+        else [ ];
+    in
+    if excluded == [ ] then src
+    else if builtins.isString src then
+      throw "programs.dsh.plugins.${name}: excludedPresets applies to plugin-carried presets; in-box bundle '${src}' ships none"
+    else if lib.isDerivation src then
+      let
+        pas = src.passthru or { };
+        shipped = pas.dshPresetsShipped or pas.dshPresets or null;
+        unknown = filter (id: !(builtins.elem id shipped)) excluded;
+      in
+      if shipped == null then
+        throw "programs.dsh.plugins.${name}: excludedPresets needs a registry source (this derivation carries no preset metadata)"
+      else if unknown != [ ] then
+        throw "programs.dsh.plugins.${name}: excludedPresets lists '${builtins.head unknown}' but the plugin ships no such preset (shipped: ${concatStringsSep ", " shipped}) — typo, or stale after upstream drop?"
+      else if !(pas ? stripPresets) then
+        throw "programs.dsh.plugins.${name}: excludedPresets needs a registry-built source (this derivation cannot be re-derived for stripping)"
+      else
+        pas.stripPresets excluded
+    else if builtins.isPath src then
+      let shipped = shippedOf src; in
+      let unknown = filter (id: !(builtins.elem id shipped)) excluded; in
+      if unknown != [ ] then
+        throw "programs.dsh.plugins.${name}: excludedPresets lists '${builtins.head unknown}' but the plugin ships no such preset (shipped: ${concatStringsSep ", " shipped}) — typo, or stale after upstream drop?"
+      else
+        pkgs.runCommand "dsh-plugin-${name}-presets-stripped"
+          {
+            # 剥离副本携带同款元数据(发现扫描读 dshPresets,已过滤)
+            passthru = {
+              dshPresets = filter (id: !(builtins.elem id excluded)) shipped;
+              dshPresetsShipped = shipped;
+            };
+          } ''
+            # 直接插值(toString 会丢 path context → 沙箱无此输入)
+            cp -r ${src}/. "$out"
+            chmod -R u+w "$out"
+            ${concatMapStrings (id: ''
+              rm -rf "$out/presets/${id}"
+            '') excluded}
+          ''
+    else src;
+
   # 名字→源:缺省 registry(不在 registry 且未显式给 source 时,mkPlugin
   # 端 passthru 缺 packageName 会 throw —— 提前给友好错误)
   sourceOf = pkgs: name: p:
-    if p.source != null then p.source
-    else if pkgs ? dshPlugins && pkgs.dshPlugins ? ${name} then pkgs.dshPlugins.${name}
-    else if lookup pkgs name != null then lookup pkgs name
-    else throw "programs.dsh.plugins.${name}: no source given and '${name}' not in pkgs.dshPlugins (add it to plugins/names.txt and run the updater, or set source)";
+    withPresetsExcluded pkgs name p
+      (
+        if p.source != null then p.source
+        else if pkgs ? dshPlugins && pkgs.dshPlugins ? ${name} then pkgs.dshPlugins.${name}
+        else if lookup pkgs name != null then lookup pkgs name
+        else throw "programs.dsh.plugins.${name}: no source given and '${name}' not in pkgs.dshPlugins (add it to plugins/names.txt and run the updater, or set source)"
+      );
 
   # face 插件源:in-box 键名映射(headless → @deepseek-ai/dsh-headless)>
   # 显式 source > registry 尾名反查
   faceSourceOf = pkgs: name: p:
-    if p.source != null then p.source
-    else if inBoxFaces ? ${inBoxName name} then inBoxName name
-    else if lookup pkgs name != null then lookup pkgs name
-    else throw "programs.dsh.plugins.${name}: face plugin requires a source (registry entry, in-box bundle, or explicit source)";
+    withPresetsExcluded pkgs name p
+      (
+        if p.source != null then p.source
+        else if inBoxFaces ? ${inBoxName name} then inBoxName name
+        else if lookup pkgs name != null then lookup pkgs name
+        else throw "programs.dsh.plugins.${name}: face plugin requires a source (registry entry, in-box bundle, or explicit source)"
+      );
 in
 {
   inherit lookup sourceOf faceSourceOf inBoxName;

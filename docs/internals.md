@@ -330,14 +330,24 @@ activation 物化整体退役**,旧物化区带 stamp 目录一次性清理)。
   derivation 走 `passthru.dshPresets`(update.py 收录时探测 `presets/*/
   agent.cordis.yml`),flake path 源直扫目录)—— `plugins.dsh-tui.enable`
   是唯一事实,preset 跟随插件生命周期;用户显式 `presets.<name>`
-  声明与发现撞名 → 显式胜;黑名单 `plugins.<name>.excludedPresets`
-  不接管特定 preset,排除 id 不在插件探测集 → eval throw;全禁
-  `plugins.<name>.presets = false`
+  声明与发现撞名 → 显式胜;**`excludedPresets` = 源级物理剥离**
+  (registry.withPresetsExcluded:preset 目录从插件源移除 —— 播种器
+  ensurePackagedPresets 只认包内 presets/,目录没了就种不出来;
+  这是唯一的真 opt-out,上游无 suppress 面);排除特定 preset 用
+  `plugins.<name>.excludedPresets`,排除 id 不在 shipped 集 → eval
+  throw;全禁接管(保留播种原件)用 `plugins.<name>.presets = false`
 - **上游跟随**:flake bump → source 包变 → farm 重建,与 profile
   的 base+userPatches 完全同构;disabled/insert 形态行不重放(全局
   树语义)
 - **耦合注记**:两行舞对 base 行 id `"agent-presets"` 硬耦合 ——
   上游改名则 disable 行 warn-skip + 双服务共存炸(loud,非静默)
+- **播种器与剥离**:dsh-tui 的 `ensurePackagedPresets()` 在 apply()
+  无条件跑(无 config 门),只认**包内 presets/** 目录,user 根缺
+  即种、revision 变即换 —— roster 无 suppress 面,"隐藏 shipped
+  preset"在上游不可表达。真 opt-out 只能做在打包层:excludedPresets
+  经 registry.withPresetsExcluded 物理剥离源目录(播种器无从种、
+  发现无从扫、farm 无从接管)。user 根的历史播种副本剥离后成孤儿
+  (播种器不再触碰,目录不会被清)→ 一次性手动删除
 - **UI 标签语义**:preset 菜单的"内置"是 trust 二值不是出处 —— farm
   全体(system trust)显示内置样式,与 provenance 无关;插件携带的
   preset(如 liangshen)显示自己的 name/描述(不在上游本地化表),

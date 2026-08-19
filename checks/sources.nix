@@ -271,6 +271,17 @@ in
       foundExcl = applyDiscover {
         d = { enable = true; source = pathSrc; excludedPresets = [ "second-one" ]; };
       };
+      # 剥离物理性:发现的路径落在剥离副本内,被排除目录物理不存在
+      strippedPresets = builtins.dirOf foundExcl.handmade;
+      # registry 链路(真 dsh-tui):排除 liangshen → 发现面无此 id
+      # (sourceOf 剥离 → passthru.dshPresets 已过滤)
+      foundTuiExcl = applyDiscover {
+        "dsh-tui" = {
+          enable = true; face = null; source = null; profiles = [ ];
+          settings = { }; patches = [ ]; patchId = null;
+          excludedPresets = [ "liangshen" ];
+        };
+      };
       typoExcl = builtins.tryEval (builtins.deepSeq
         (applyDiscover {
           e = { enable = true; source = pathSrc; excludedPresets = [ "no-such-preset" ]; };
@@ -296,6 +307,8 @@ in
         "preset-discover: derivation source passthru.dshPresets must be discovered")
       (assert' (foundExcl ? handmade && !foundExcl ? second-one)
         "preset-discover: excludedPresets must suppress takeover of the listed preset only")
+      (assert' (!foundTuiExcl ? liangshen)
+        "preset-discover: registry-source excludedPresets must strip the preset from discovery (source-level removal)")
       (assert' (!typoExcl.success)
         "preset-discover: excludedPresets with an id the plugin does not ship must throw at eval time")
       (assert' (!foundAllOff ? handmade && !foundAllOff ? second-one)
@@ -308,7 +321,14 @@ in
         "preset-discover: shippedPreset helper must resolve the standard preset path")
       (assert' (!(builtins.tryEval (builtins.deepSeq (dshLib.shippedPreset pkgs "no-such-preset") null)).success)
         "preset-discover: shippedPreset must throw on unknown preset (upstream layout drift fail-loud)")
-    ]) "touch $out");
+    ]) ''
+      # 剥离物理性(构建级):保留目录在,排除目录不存在
+      test -d ${strippedPresets}/handmade \
+        || { echo "kept preset dir missing in stripped copy" >&2; exit 1; }
+      test ! -e ${strippedPresets}/second-one \
+        || { echo "excluded preset dir must be physically stripped" >&2; exit 1; }
+      touch $out
+    '');
 
   # preset 重放 drift 拦截:真实 shipped standard + 真实能力行组过
   # buildPreset,断言 tool-web fetch 保险丝 + 超时键真的写进去了。

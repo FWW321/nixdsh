@@ -837,12 +837,14 @@ in
             default = [ ];
             example = [ "liangshen" ];
             description = ''
-              本插件托管 preset 中**不接管**的 id(黑名单):不接管的
-              preset 走上游自身通道(如 dsh-tui 的 ensurePackagedPresets
-              播种原件),不做能力行重放。排除 id 不在插件探测集内
-              (拼错/上游已删)→ 求值期 throw。与显式
-              presets.\<id\>.source 声明是两条通道,后者恒胜。
-              全禁用 presets = false 更直接,二者互斥(同设 → throw)。
+              本插件托管 preset 中要**彻底移除**的 id(黑名单 = 不存在):
+              构建期从插件源物理剥离 preset 目录 —— farm 无从接管,
+              dsh-tui 的播种器(ensurePackagedPresets 只认包内
+              presets/)无从种出,菜单不可见不可选。注意:user 根已
+              播种的历史副本需一次性手动删除(剥离生效后不会再生)。
+              排除 id 不在插件 shipped 集内(拼错/上游已删)→ 求值期
+              throw。仅"不接管"而保留上游播种原件,用 presets = false。
+              与显式 presets.\<id\>.source 声明是两条通道,后者恒胜。
             '';
           };
           presets = lib.mkOption {
@@ -869,7 +871,7 @@ in
               全局 programs.dsh.defaultPreset。id 枚举校验(求值期
               fail-loud):合法集 = shipped ∪ declared ∪ discovered
               —— 与全局项同款,含 excludedPresets 黑名单拒斥
-              (黑名单 id 已被踢出 discovered,锚定它 = 矛盾声明)。
+              (黑名单 id 已从源剥离,锚定它 = 矛盾声明)。
             '';
           };
           # roster 舞资格:本 face 的 base 树是否带 agent-presets 行。
