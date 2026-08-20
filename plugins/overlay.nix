@@ -250,3 +250,10 @@ lib.mapAttrs
     then buildPlugin name e
     else plainPlugin name e)
   (import ./generated.nix)
+  # 外部消费者出口:宿主耦合型/异构构建(esbuild 等)插件在下游 flake 自建
+  # derivation 时,仍需 peer 回链保持与 dsh plugin add 等价的 node_modules
+  # 布局(linkPeers 闭包已含 hostDsh)。见 nixdsh README「非 Nix 逃生口」
+  # 与 docs/deepseek-harness-plugin-research.md §nix 侧物化。
+  # 用例:nixos-config 的 @open-design/dsh-runtime(OD 协议适配器,版本与
+  # OD daemon 原子耦合,不走 registry 独立版本化)
+  // { inherit linkPeers; }
