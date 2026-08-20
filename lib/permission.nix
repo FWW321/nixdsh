@@ -20,7 +20,7 @@
 { lib, rawYaml }:
 
 let
-  # base 行 permission.presets 的三键镜像(rc.7 dsh-base cordis.patch.yml;
+  # base 行 permission.presets 的三键镜像(rc.8 dsh-base cordis.patch.yml;
   # read-only 在 base 行中在场,服务 Config 默认表反而只有两条 ——
   # 整表重述必须以 base 行为准)
   presetsTable = {

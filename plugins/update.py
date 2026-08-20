@@ -59,17 +59,30 @@ def api(path: str):
 
 
 def resolve_version(owner: str, repo: str) -> tuple[str, str]:
-    """release tag > 最新 tag > 默认分支 HEAD。失败即抛,绝不产出空 rev。"""
+    """最新 tag(semver 最大;release tag 并池 —— 上游有的仓库 tag-only
+    发版,如 dsh-TUI v0.8.3+ 无 release)> 默认分支 HEAD。
+    失败即抛,绝不产出空 rev。"""
+
+    def tag_key(name: str):
+        # "v0.8.5" → [(1,0),(1,8),(1,5)];非数字段(如 -rc 前缀)排最低
+        s = name[1:] if name[:1] in ("v", "V") else name
+        return [
+            (1, int(seg)) if seg.isdigit() else (0, 0)
+            for seg in s.replace("-", ".").split(".")
+        ]
+
     try:
-        tag = api(f"repos/{owner}/{repo}/releases/latest")["tag_name"]
-        return tag, tag
-    except (urllib.error.HTTPError, KeyError):
-        pass
-    try:
-        tag = api(f"repos/{owner}/{repo}/tags")[0]["name"]
+        tags = [t["name"] for t in api(f"repos/{owner}/{repo}/tags?per_page=100")]
+        try:
+            tags.append(api(f"repos/{owner}/{repo}/releases/latest")["tag_name"])
+        except (urllib.error.HTTPError, KeyError):
+            pass
+        if not tags:
+            raise IndexError("no tags and no latest release (API cache node?)")
+        tag = max(tags, key=tag_key)
         sha = api(f"repos/{owner}/{repo}/git/ref/tags/{tag}")["object"]["sha"]
         return sha, tag
-    except (urllib.error.HTTPError, IndexError, KeyError):
+    except (urllib.error.HTTPError, IndexError, KeyError, ValueError):
         pass
     branch = api(f"repos/{owner}/{repo}")["default_branch"]
     sha = api(f"repos/{owner}/{repo}/commits/{branch}")["sha"]

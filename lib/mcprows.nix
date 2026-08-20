@@ -1,4 +1,4 @@
-# MCP 服务器行(rc.7 dsh-mcp-client 实测):插件不在默认树,每 server
+# MCP 服务器行(rc.8 dsh-mcp-client 实测):插件不在默认树,每 server
 # 一个条目,包裹成 insert 行 —— cordis patch applier 对组合树里不
 # 存在的 id 只 warn+skip(实测 cordis-plugin-include:`patch: entry
 # not found`,7 行全丢、/mcp 空屏),新条目必须走 insert 通道

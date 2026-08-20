@@ -24,7 +24,7 @@ let
       # 省略 null/空的字段;settings 逃生口最后并(未 typed 字段直通)。
       # `or` 缺省:renderSettings 可脱离 module system 直接调用(checks/测试)
       # models 行缺 name 时补 "<供应商显示名>/<id>":上游回落是裸 id
-      # (实测 rc.7 dsh-llm-pi-ai:name ?? catalog 基名 ?? id),多路由同名
+      # (实测 rc.8 dsh-llm-pi-ai:name ?? catalog 基名 ?? id),多路由同名
       # 模型在 /model 无法区分;显式 name 原样保留,modelOverrides 不补
       # (其语义就是只改指定字段,catalog 模型已有可读基名)
       renderProvider = key: p:
@@ -134,7 +134,7 @@ let
     // wfSettings
     // (sectionIf "llm-deepseek" llmDeepseek);
 
-  # agent 预设源校验(rc.7 dsh-agent-presets 实测):目录须含组合文件
+  # agent 预设源校验(rc.8 dsh-agent-presets 实测):目录须含组合文件
   # agent.cordis.yml(preset.yml 元数据/.mjs 插件可选)。纯文件零构建,
   # 上游热发现免重启 —— 物化即生效。
   # 返回 { name → toString source }(string/derivation 归一为字符串路径,

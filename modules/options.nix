@@ -202,7 +202,7 @@ in
       description = "typed 便利键:渲染进 settings.telemetry.mode,覆盖 freeform 同名值";
     };
 
-    # 默认模型选择(dsh-agent-default-model 命名空间段,schema 实测于 rc.7
+    # 默认模型选择(dsh-agent-default-model 命名空间段,schema 实测于 rc.8
     # 源码:provider/model 必填,reasoningEffort 可选)。typed 覆盖 freeform
     # settings."agent-default-model" 同名键
     defaultModel = lib.mkOption {
@@ -222,7 +222,7 @@ in
             description = "模型 id(须在该 provider 的 models 清单内)";
           };
           reasoningEffort = lib.mkOption {
-            # 值域 = 上游 THINKING_LEVELS(实测 rc.7 源码):上游 settings schema
+            # 值域 = 上游 THINKING_LEVELS(实测 rc.8 源码):上游 settings schema
             # 宽松(z.string()),但请求期 fail("does not support reasoning
             # effort");enum 把该错误前移到 eval 期。上游加档时此处会
             # hard-fail —— 那正是 bump 提示
@@ -984,7 +984,7 @@ in
       '';
     };
 
-    # agent 预设(rc.7 dsh-agent-presets 实测):目录 = 预设,id = 目录名,
+    # agent 预设(rc.8 dsh-agent-presets 实测):目录 = 预设,id = 目录名,
     # agent.cordis.yml(组合树)+ preset.yml(显示元数据)+ 任意 .mjs 插件,
     # 纯文件零构建(宿主 loader 负责模块解析,无需 node_modules)。
     # 热发现:运行中新增免重启(每次调用 re-read roots,同 settings.yaml 档)
@@ -1035,7 +1035,7 @@ in
     # tool-bash 基础树启用、被 dsh-tui 的 patch 关掉;用户层是最后一层,
     # enable 双向生效(实测:disabled: false 可反向启用 bundle 关掉的条目)。
     #
-    # 已知条目 id(rc.7 base 树,`dsh --dump-config` 可查全量;第三方 bundle
+    # 已知条目 id(rc.8 base 树,`dsh --dump-config` 可查全量;第三方 bundle
     # 的条目 id 同样可写):
     #   llm-deepseek / llm-pi-ai / web-search-deepseek / timer / hmr /
     #   fs-sandbox / bash-sandbox / pwsh-sandbox / approval / permission /
@@ -1084,7 +1084,7 @@ in
       '';
     };
 
-    # MCP 服务器(rc.7 dsh-mcp-client 实测):插件不在默认树,每 server
+    # MCP 服务器(rc.8 dsh-mcp-client 实测):插件不在默认树,每 server
     # 一行 cordis 行(name @deepseek-ai/dsh-mcp-client),工具暴露为
     # mcp__<serverName>__<tool>。行渲染进所有 profile → 变化走 bundle
     # 指纹重启(web 服务自动跟进)。env/headers 值支持 secretFile 形态

@@ -66,7 +66,7 @@ in
 stdenv.mkDerivation (finalAttrs: {
   pname = "deepseek-harness";
 
-  version = "0-unstable-2026-08-17";
+  version = "0-unstable-2026-08-19";
 
   __structuredAttrs = true;
   strictDeps = true;
@@ -74,15 +74,15 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "deepseek-ai";
     repo = "deepseek-harness";
-    rev = "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca";
-    hash = "sha256-xPP8FB308n8SD5B65whaErLyaDBbFferoQ9g3H6h2es=";
+    rev = "141eb6fef83422698aef7a981029e843e8161534";
+    hash = "sha256-FzToX43k6upXkwTxTYXHRK5IdatxibxeZgZBpuDE7S4=";
   };
 
   pnpmDeps = fetchPnpmDeps {
     inherit (finalAttrs) pname version src;
     inherit pnpm;
     fetcherVersion = 4;
-    hash = "sha256-zmlWt5HYvzkCnCDD5X/psgfGPbRAUwO0p4qDtI5+R5M=";
+    hash = "sha256-+PsdK9u3ZKv4XtSc8tBKKP48J/95/CGTMIUf8Q8dbok=";
   };
 
   nativeBuildInputs = [
@@ -109,20 +109,39 @@ stdenv.mkDerivation (finalAttrs: {
           "'${lib.getExe pkgsStatic.stdenv.cc}'"
     ''}
 
+    # rc.8 起客户端构建期要 git rev-parse(tarball 无 .git);上游为
+    # 非 Git 构建环境预留显式环境变量(client-build-environment.ts)
+    export DSH_CLIENT_COMMIT_HASH="141eb6fe"
+
     # NixOS does not provide /bin/bash; use the packaged interactive shell locally.
+    # (rc.8 起 shellPath 默认从 Schemastery default 行改为 DEFAULT_BASH_SHELL 常量)
     substituteInPlace packages/terminal/terminal-bash/src/config.ts \
       --replace-fail \
-        "shellPath: z.string().default('/bin/bash')" \
-        "shellPath: z.string().default('${lib.getExe bashInteractive}')"
+        "export const DEFAULT_BASH_SHELL = '/bin/bash'" \
+        "export const DEFAULT_BASH_SHELL = '${lib.getExe bashInteractive}'"
 
     # Keep CSS IDs relative to avoid build-root references and sort exports for deterministic bundles.
+    # (rc.8 起 CSS 虚拟前缀一个变三个:module/global/inline;浏览器加载器
+    # 注册表内嵌虚拟 ID → 绝对路径会泄进 client bundle)
     substituteInPlace packages/client/tsdown.client.ts \
       --replace-fail \
         'return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX' \
         'return CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX' \
       --replace-fail \
+        'return INLINE_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX' \
+        'return INLINE_CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX' \
+      --replace-fail \
+        'return GLOBAL_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX' \
+        'return GLOBAL_CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX' \
+      --replace-fail \
         'const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)' \
         'const fileId = resolvePath(virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))' \
+      --replace-fail \
+        'const fileId = virtualId.slice(INLINE_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)' \
+        'const fileId = resolvePath(virtualId.slice(INLINE_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))' \
+      --replace-fail \
+        'const fileId = virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)' \
+        'const fileId = resolvePath(virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))' \
       --replace-fail \
         'Object.entries(cssExports ?? {})' \
         'Object.entries(cssExports ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)'
@@ -449,7 +468,7 @@ stdenv.mkDerivation (finalAttrs: {
   versionCheckProgramArg = "--version";
 
   preVersionCheck = ''
-    export version=0.1.0-rc.7
+    export version=0.1.0-rc.8
   '';
 
   postInstallCheck = ''
@@ -460,7 +479,7 @@ stdenv.mkDerivation (finalAttrs: {
     terminalBash="$app/node_modules/@deepseek-ai/dsh-terminal-bash/lib/index.js"
     grep -F ${lib.escapeShellArg (lib.getExe bashInteractive)} "$terminalBash" > /dev/null
 
-    if grep -F 'default("/bin/bash")' "$terminalBash" > /dev/null; then
+    if grep -F '"/bin/bash"' "$terminalBash" > /dev/null; then
       echo "terminal-bash still defaults to /bin/bash" >&2
       exit 1
     fi
@@ -495,7 +514,8 @@ stdenv.mkDerivation (finalAttrs: {
       "$out/bin/dsh" \
         web \
         --host 127.0.0.1 \
-        --port 0 > "$webLog" 2>&1 &
+        --port 0 \
+        --no-open > "$webLog" 2>&1 &
 
     webPid=$!
 
@@ -512,7 +532,8 @@ stdenv.mkDerivation (finalAttrs: {
         exit 1
       fi
 
-      webUrl="$(sed -n 's/^dsh web: //p' "$webLog")"
+      # rc.8 起 "dsh web: " 前缀行还有浏览器提示行;只取 URL 形态
+      webUrl="$(sed -n 's/^dsh web: \(http[^[:space:]]*\)$/\1/p' "$webLog")"
 
       if [[ -n "$webUrl" ]]; then
         break

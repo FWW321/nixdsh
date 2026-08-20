@@ -5,13 +5,13 @@
 > 上游插件机制本体调研另见
 > [deepseek-harness-plugin-research.md](deepseek-harness-plugin-research.md)。
 > 「实测 rc.X」标注 = 该事实最后一次源码核对的版本(rc.5 = 08-13,
-> rc.6 = npm-only,rc.7 = 08-17 `99f6f02`)。
+> rc.6 = npm-only,rc.7 = 08-17 `99f6f02`,rc.8 = 08-19 `141eb6fe`)。
 
 ## 仓库布局
 
 ```
 nixdsh/
-├── package.nix        # dsh CLI:nixpkgs#552467 基座(rc.7 源码 + 上游 lockfile
+├── package.nix        # dsh CLI:nixpkgs#552467 基座(rc.8 源码 + 上游 lockfile
 │                      #   + pnpm deploy 最小闭包 + 全套 installCheck:
 │                      #   boot web/HTTP 探针、真 PTY、koffi/sharp、Landlock、
 │                      #   坏链接与 build 路径泄漏扫描)
@@ -54,7 +54,7 @@ nixdsh/
 | **配置承载型**(value-shaped) | 无配置 → 功能为零或必败。配置 = 声明段/环境变量/credentials 服务,**住址不限** | `mcp-client`(零 server = 零工具)、`skill-filesystem`(空目录 = 空目录)、`web-search-deepseek`(每次搜索必败 `WEB_PROVIDER_CREDENTIAL_MISSING`,严格模式无降级)、`llm-deepseek`(每次请求必败 `MISSING_CREDENTIAL`) |
 | **裸用型**(switch-shaped) | 零配置即完整工作 | `tool-bash`、`tool-fs`、`tool-todo`、`timer` |
 
-**包的"在场"有三种形态,启用路径各不同**(实测 rc.6;dsh-mcp-client
+**包的"在场"有三种形态,启用路径各不同**(实测 rc.8;dsh-mcp-client
 查证:CLI runtime node_modules 有包,base/tui/web 三树零行引用,tui
 profile 的 package.json 也不含它):
 
@@ -102,7 +102,7 @@ HM 的 `mkForce`:语义不可删除,但出现即设计缺口信号。
 `plugins.<name>.settings` 即"声明即启用"同款)。
 
 **多源行是常态,判据与禁用机制均来源无关**。同一行 id 可同时存在于
-多棵树(实测 rc.6:`llm-deepseek` 在 dsh-base/cordis.patch.yml:450 有一
+多棵树(实测 rc.8:`llm-deepseek` 在 dsh-base/cordis.patch.yml:450 有一
 份中性默认,在 dsh-tui/cordis.yml:92 又有一份强意见默认 ——
 `thinking: enabled` + `reasoningEffort: max`)。行归属哪个包无关紧要,判据
 只看"这行是否未经你的声明就在树上"。因此 `inBoxPlugins` 的禁用行进
@@ -146,7 +146,7 @@ provider 全注册(模型可手切,活备选);webSearch/webFetch 侧仅选中者
 将来支持热切,策略改为"声明即在,选择器热切"(lib/webseam.nix 注释
 有同步标记)。
 
-**可见性规则:每个 UI 面跟随拥有它的行**(实测 rc.6)。禁用一个行后,
+**可见性规则:每个 UI 面跟随拥有它的行**(实测 rc.8)。禁用一个行后,
 哪些面消失取决于"谁拥有那个面":
 
 | UI 面 | 拥有者行 | 行禁用后 |
@@ -182,7 +182,7 @@ one provider-selection policy owner"):search/fetch 两套同构机制,
 
 | | search 缝 | fetch 缝 |
 |---|---|---|
-| 注册表 | `searchProviders`(exa/zhipu/deepseek 在填) | `fetchProviders`(rc.6 零注册者) |
+| 注册表 | `searchProviders`(exa/zhipu/deepseek 在填) | `fetchProviders`(rc.8 零注册者) |
 | 接口 | `{id, available(), search({query, maxResults}) → {sources[]}}` | `{id, available(), fetch({url}) → {statusCode, body}}`(body 封闭 union `html`\|`text`) |
 | 选择器 | `searchProvider` / `DSH_WEB_SEARCH_PROVIDER` | `fetchProvider` / `DSH_WEB_FETCH_PROVIDER` |
 | 模型面工具 | `web_search`(tool-web) | `web_fetch`(tool-web,`fetch` 键,base 默认 **false**) |
@@ -192,7 +192,7 @@ one provider-selection policy owner"):search/fetch 两套同构机制,
 choose the request target")。模型自选 URL + provider 在本机发请求 =
 经典 SSRF 面(127.0.0.1/169.254.169.254 云元数据/RFC1918/DNS
 rebinding/重定向跳内网);上游立场是 seam 不挡、谁注册谁防护,官方
-规划中的 `dsh-web-fetch-http`(README 生态表)未随 rc.6 发布,故
+规划中的 `dsh-web-fetch-http`(README 生态表)未随 rc.8 发布,故
 `fetch: false` 保险丝。search 缝无此问题(query 是字符串非 URL,
 请求目标永远是 provider 自己的 API)。
 
@@ -203,20 +203,20 @@ rebinding/重定向跳内网);上游立场是 seam 不挡、谁注册谁防护,�
 provider 平凡满足(不从本地网络抓取,防护清单零条适用)。
 
 **已知限制:web face 的 preset 挂独立 tool-web,patch 层不可达**(实测
-rc.6;**对称面:开保险丝的 patch 行同样不可达** —— 解法见「roster
+rc.8;**对称面:开保险丝的 patch 行同样不可达** —— 解法见「roster
 接管与能力行重放」节,fetch:true 经 preset 物化穿透)。`webSearch = null`
 禁三行(`web`/`web-search-deepseek`/`tool-web`
 —— 三个独立行,"不要搜索能力"同时覆盖 provider 与工具,工具禁用不
 依赖 provider)。
 
-**base 行 tool-web 的三 face 三态**(逐 profile dump 实测 rc.6;这行
+**base 行 tool-web 的三 face 三态**(逐 profile dump 实测 rc.8;这行
 不是死行,是 headless 的活水 —— base 默认完整集、face patch 做减法):
 
 | face | base tool-web | 谁禁的 | 搜索工具来源 |
 |---|---|---|---|
 | headless | **启用** | 无人禁 | base 行本身(裸会话无 preset 层) |
 | web | 禁用 | dsh-web-app bundle patch | shipped preset 各自挂(standard/code/cordis 有,minimal 无) |
-| tui | 禁用 | dsh-tui cordis.patch.yml:120(连批工具精简) | preset(liangshen 的 agent.cordis.yml:385 实证) |
+| tui | 禁用 | dsh-tui cordis.patch.yml:120(连批工具精简,v0.8.5 校准) | preset(liangshen 的 agent.cordis.yml:390 实证) |
 
 web face 上 tool-web 存在两份的架构语义(源码注释 dsh-web-app
 :383-384 原话:"The `web` service and its search provider stay in the
@@ -295,7 +295,7 @@ provider 加过审计事件(照官方 recordRequest 模式),实测毒化 —— 
 不收 issue/PR,无修缝可等;若将来开放修缝(mountPreset overlay),
 可退役 —— 注记保留可能,不依赖。
 
-背景(实测 rc.6):能力行组的宿主层 patch 对 web/tui 会话**无效**
+背景(实测 rc.8):能力行组的宿主层 patch 对 web/tui 会话**无效**
 ——dsh-web-app bundle 把 tool-web 等模型面工具整行禁用("The Web
 surface disables them here and lets each session mount a preset
 instead"),dsh-tui patch 同构;会话工具的真实来源是每会话挂载的
@@ -355,7 +355,7 @@ activation 物化整体退役**,旧物化区带 stamp 目录一次性清理)。
 
 ## 分化轴调研结论(为何只有全局均一 + per-preset 逃生口)
 
-"能不能 per-face 分化能力行(如 tui 树禁 fetch)?" —— rc.6 源码实证,
+"能不能 per-face 分化能力行(如 tui 树禁 fetch)?" —— rc.8 源码实证,
 四条通道全关,且多数是有意设计:
 
 1. **mount 时 overlay**:`mountPreset`(dsh-agent-presets lib/index.js:707)
@@ -415,9 +415,9 @@ model/provider;fork = 种入父**已完成 turn 前缀**(截到最后
 只传历史,不传工具限制/权限。注:base 行(dsh-base
 cordis.patch.yml:324)fork 钉 `one-shot`(注释引 fork-one-shot Agent
 Note:continuable 的 report 工具/提示段会打乱继承前缀的字节序,毁掉
-fork 存在意义的 KV 复用),但 standard preset(agent.cordis.yml:193-198)
+fork 存在意义的 KV 复用),但 standard preset(agent.cordis.yml:191-198)
 已覆盖为 `continuable` —— master 新翻转,fork 包 README"shipped 全
-one-shot"未跟,以 rc.6 源码为准。
+one-shot"未跟,以 rc.8 源码为准。
 
 **平面归属(印证两平面教义,standard preset 注释原文自证)**:
 host 面 = `subagents` 注册表 + spawn/fork 后端(进程单例,api-proxy
@@ -426,7 +426,7 @@ host 面 = `subagents` 注册表 + spawn/fork 后端(进程单例,api-proxy
 scope-aware,每 mounted preset 一份会在第二会话重复注册 throw);
 preset 面 = 委托**工具行**(`delegation` 组:standard
 agent.cordis.yml:174 起;minimal 无;`subagent_codex`/
-`subagent_claude_code` 行 `disabled:true` 待启,:203/:212)。
+`subagent_claude_code` 行 `disabled:true` 待启,:208/:218)。
 
 **child 组合强制 join 父 preset**:`applyChildComposition(childCtx,
 parent, composition)` 把 join 做成唯一调用形态 —— 不 join 的 child
@@ -470,7 +470,7 @@ agent 定义文件,subagent 暴露完全由 preset 工具行决定,现有机制�
 未稳,typed 化 = 每次 bump 背 drift 负债;触发条件出现再按需做
 (候选优先序:maxParallelToolCalls → shell.timeoutMs → llm retry)。
 
-## 服务与 CLI:无共享守护进程(实测 rc.5 依赖图)
+## 服务与 CLI:无共享守护进程(实测 rc.8 依赖图)
 
 **每个 face boot 一棵完整独立的 cordis 树**,不是"后端守护 + 瘦前端"。
 TUI 插件的依赖表直接内嵌运行时(`dsh-agent`/`dsh-session`/`dsh-storage`/
@@ -485,7 +485,7 @@ WebSocket server 是 web 应用**进程内**给浏览器用的传输层,不跨�
 进程可见,这也是 yq-merge 方案成立的前提)、凭证服务、会话存储。
 web 服务与 `dsh tui` 并行运行是预期用法:两进程、两棵树、一份盘上状态。
 
-## 密钥三级链条(实测 rc.6)
+## 密钥三级链条(实测 rc.8)
 
 `mcpServers` 的 secret 形态(`{ secretFile; prefix? }`)设计目标是
 **store 工件零密钥**。链条三级:
