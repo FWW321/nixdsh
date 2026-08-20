@@ -30,6 +30,11 @@ let
   runtimeNode = nodejs-slim_24;
   pnpm = pnpm_11.override { nodejs-slim = runtimeNode; };
 
+  # 上游 npm publish 版本(单一事实,三处消费):preVersionCheck 校验目标、
+  # passthru.upstreamVersion → checks/npm-oracle.nix 的 tarball URL。
+  # bump 时随 commit/hash 一起改;错位则 installCheck 或 oracle FOD 先炸
+  upstreamVersion = "0.1.0-rc.8";
+
   # pnpm pack 的 manifest 依赖键排序(determinism):两处 installPhase
   # NODE 脚本共用(peer 补链的 materialize 与 CLI pack 安装)。经 env
   # 传入模块路径,heredoc 保持引用模式(<<'NODE')零 shell 展开风险
@@ -468,7 +473,7 @@ stdenv.mkDerivation (finalAttrs: {
   versionCheckProgramArg = "--version";
 
   preVersionCheck = ''
-    export version=0.1.0-rc.8
+    export version=${upstreamVersion}
   '';
 
   postInstallCheck = ''
@@ -669,6 +674,11 @@ stdenv.mkDerivation (finalAttrs: {
       exit 1
     fi
   '';
+
+  passthru = {
+    # checks/npm-oracle.nix 读;passthru 不影响 derivation 哈希
+    inherit upstreamVersion;
+  };
 
   meta = {
     description = "Open-source agent harness developed by DeepSeek AI";

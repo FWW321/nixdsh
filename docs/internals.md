@@ -513,6 +513,17 @@ GitHub PAT ×1、Context7 key ×1;对应 store bundle 三份均只有
 env-indirection(如通用 `headers.<k>.env`),物化层即可退到纯路径
 引用,明文归零。
 
+## npm publish oracle(物化循环的地面真值)
+
+`checks/npm-oracle.nix` 把 pack 产物对照上游 npm tarball(物化循环的
+重建目标)。四不变量:manifest 逐字段深等价、文件清单零差集(排除
+node_modules;内容不比 —— 源码级决定性 patch 使 client bundle 字节
+不同属预期)、上游声明的 runtime dependencies 全物化、bin 入口存在。
+版本事实在 `package.nix` 的 `upstreamVersion`(preVersionCheck 同读,
+经 passthru 供 oracle 取 tarball)。对照动机:numtide/llm-agents.nix
+直接消费此 tarball 打包,证明它是可依赖的权威;我们的 oracle 不消费
+它构建,只用它对账。2026-08-21 对 141eb6f ↔ rc.8 实测零差集。
+
 ## 上游化路线
 
 nixpkgs#552467 合并后:删 `package.nix`,overlay 改 `dsh = prev.dsh;`,

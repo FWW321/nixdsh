@@ -421,7 +421,9 @@ users/me/dsh/
 ## 维护
 
 - `nix flake check` — profile 模型 + 包验证
-- bump dsh:改 `package.nix` 的 rev/hash + pnpmDepsHash(注释里有流程)
+- bump dsh:改 `package.nix` 的 rev/hash + pnpmDepsHash + `upstreamVersion`
+  (注释里有流程),再重算 `checks/npm-oracle.nix` 的 tarball hash;
+  `nix flake check` 过 oracle = 物化循环与上游 publish 仍然一致
 - bump 插件:合并每周 PR,或手动 `nix run .#dsh-plugins-update`
 - 深入阅读:[docs/internals.md](docs/internals.md)(设计准则/上游实证/
   手术手册)、[docs/deepseek-harness-plugin-research.md](docs/deepseek-harness-plugin-research.md)

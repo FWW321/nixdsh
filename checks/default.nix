@@ -7,6 +7,7 @@
 #                  in-tree×4/roster 舞资格/权限整表
 #   ./mcp.nix      MCP 行渲染/名校验/secret 注入行为/insert 通道端到端
 #   ./sources.nix  providers 合并语义/presets/skills 校验/preset 重放 drift
+#   ./npm-oracle.nix pack 物化产物 vs 上游 npm tarball(构建真实 dsh,bump 闸门)
 # 共享夹具(applyWith/mkFakeCfg/materialize/inTreeCheck)在 ./fixtures.nix
 # 负例强制模式:逐域 seq(域断言 seq 在域结果头部,WHNF 即达)——
 # 旧的 `f { }` 调用 + 顶层 seq 组合在 Nix≥2.34 下或空洞或硬错,勿复用
@@ -21,3 +22,4 @@ in
 // (import ./seam.nix { inherit pkgs dshLib fx; })
 // (import ./mcp.nix { inherit pkgs dshLib fx; })
 // (import ./sources.nix { pkgs = pkgs; lib = pkgs.lib; inherit dshLib fx; })
+// (import ./npm-oracle.nix { inherit pkgs; lib = pkgs.lib; })
