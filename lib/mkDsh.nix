@@ -11,8 +11,12 @@ let
       evaluated = lib.evalModules {
         specialArgs = { inherit pkgs; } // extraSpecialArgs;
         modules = [
-          (import ../modules/options.nix)
+          # 传路径而非 import 结果:模块系统给路径模块记真实 _file →
+          # options 的 declarations / 报错定位是文件而非 <unknown-file>
+          # (nixosOptionsDoc 与消费方报错都依赖这一点)
+          ../modules/options.nix
           {
+            _file = "lib/mkDsh.nix";
             programs.dsh.package = lib.mkDefault pkgs.dsh;
           }
         ] ++ modules;

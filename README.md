@@ -393,6 +393,7 @@ export —— 密钥来源与消费者同处一行,CLI/TUI/headless/web 服务�
 | `homeManagerModules.dsh` | `programs.dsh` 模块 |
 | `nixosModules.dsh` | 薄 NixOS 模块 |
 | `checks` | profile 模型验证(结构/正例/负例 fail-loud) |
+| `checks.<sys>.dsh-options-doc` | 114 option 参考文档,description 真源自动渲染:`nix build .#checks.x86_64-linux.dsh-options-doc` → `options.md` / `options.json`(声明链接指向本仓 GitHub) |
 | `apps.<sys>.dsh-plugins-update` | 插件集合更新器 |
 | `lib.mkDsh` | 独立实例化(不依赖 HM/NixOS) |
 
