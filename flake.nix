@@ -6,17 +6,25 @@
   };
 
   outputs =
-    { self, nixpkgs, systems }:
+    {
+      self,
+      nixpkgs,
+      systems,
+    }:
     let
       forEachSystem = nixpkgs.lib.genAttrs (import systems);
     in
     {
-      packages = forEachSystem (system:
-        let pkgs = import nixpkgs { inherit system; }; in
+      packages = forEachSystem (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
         {
           default = pkgs.callPackage ./package.nix { };
           dsh = pkgs.callPackage ./package.nix { };
-        });
+        }
+      );
 
       # pkgs.dsh + pkgs.dshPlugins.<name>(names.txt + update.py 生成;
       # hostDsh 注入使插件 derivation 内可回链 peer 包 → 宿主安装)
@@ -40,20 +48,43 @@
         dsh = import ./nixos-module.nix;
       };
 
-      # profile 模型验证:结构/正例 boot/负例 fail-loud
-      checks = forEachSystem (system:
+      # nix-unit 纯求值测试域(profile/seam/mcp/sources;结构化金样 +
+      # expectedError 负例)。不进沙箱 checks(测试实现 derivation 上下文
+      # 需 daemon,沙箱内无 build-hook):CI 以独立步骤跑,本地
+      #   nix shell nixpkgs#nix-unit -c nix-unit \
+      #     --flake .#tests.x86_64-linux --show-trace
+      tests = forEachSystem (
+        system:
+        import ./tests {
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ self.overlays.default ];
+          };
+        }
+      );
+
+      # 构建期验证(真 boot/真执行/独立解析器)。
+      # nix-unit 纯求值套件在 tests/ output,经 CI 步骤跑(不进沙箱:
+      # 测试实现 derivation 上下文,需 daemon;见 checks/default.nix 头注)
+      checks = forEachSystem (
+        system:
         let
           pkgs = import nixpkgs {
             inherit system;
             overlays = [ self.overlays.default ];
           };
         in
-        import ./checks { inherit pkgs; });
+        import ./checks { inherit pkgs; }
+      );
 
       # dshPlugins 集合更新器(vimPlugins update.py 个人规模 transpose,Python)
-      apps = forEachSystem (system:
+      apps = forEachSystem (
+        system:
         let
-          pkgs = import nixpkgs { inherit system; overlays = [ self.overlays.default ]; };
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ self.overlays.default ];
+          };
         in
         {
           dsh-plugins-update = {
@@ -62,14 +93,30 @@
               libraries = [ ];
             } (builtins.readFile ./plugins/update.py)}";
           };
-        });
+        }
+      );
 
       # nixvim 式独立实例化 API(与 mkDsh 同构;checks/外部消费者用)
-      lib.mkDsh = { pkgs ? import nixpkgs { system = "x86_64-linux"; overlays = [ self.overlays.default ]; }, modules ? [ ], extraSpecialArgs ? { } }:
+      lib.mkDsh =
+        {
+          pkgs ? import nixpkgs {
+            system = "x86_64-linux";
+            overlays = [ self.overlays.default ];
+          },
+          modules ? [ ],
+          extraSpecialArgs ? { },
+        }:
         (import ./lib { inherit (nixpkgs) lib; }).mkDsh { inherit pkgs modules extraSpecialArgs; };
 
       # config 侧小助手(消布局硬编码):shipped preset 路径解析
-      lib.shippedPreset = { pkgs ? import nixpkgs { system = "x86_64-linux"; overlays = [ self.overlays.default ]; }, name }:
+      lib.shippedPreset =
+        {
+          pkgs ? import nixpkgs {
+            system = "x86_64-linux";
+            overlays = [ self.overlays.default ];
+          },
+          name,
+        }:
         (import ./lib { inherit (nixpkgs) lib; }).shippedPreset pkgs name;
     };
 }

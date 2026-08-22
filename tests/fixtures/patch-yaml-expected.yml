@@ -1,0 +1,22 @@
+- config:
+    mode: "workspace-write"
+    workspaceRoot: !!js process.cwd()
+  id: "sandbox-policy"
+- config:
+    disabled-flag: false
+    fetch: true
+    searchTimeoutMs: 60000
+  id: "tool-web"
+- config:
+    attrs: {}
+    list: []
+    nested:
+      deep:
+        - 1
+        - "two"
+  id: "empty-collections"
+- config:
+    "odd key: v": "has: colon and more"
+  id: "quoted"
+- disabled: true
+  id: "plain-disable"

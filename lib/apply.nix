@@ -116,14 +116,19 @@ let
         (filterAttrs (name: p: p.enable && faces.faceOf pkgs name p == null) cfg.plugins);
 
       # in-box 条目行(全局,进所有 profile 的用户 patch 层;行级 disabled 键
-      # 是 cordis loader 原生语义,实测可双向覆盖 bundle 层的 disabled)
+      # 是 cordis loader 原生语义,实测可双向覆盖 bundle 层的 disabled)。
+      # or-守卫:裸 attrs 直调路径(applyWith 夹具/外部调用)无 module
+      # 默认值;enable 不表态(null)且无 config 的条目不发空行
+      # (历史:dsh-inbox-rows 检查曾因 seq-列表空转未发现此路径 throw)
       inBoxPatches =
         mapAttrsToList
           (id: p:
             { inherit id; }
-            // (lib.optionalAttrs (p.enable != null) { disabled = !p.enable; })
-            // (lib.optionalAttrs (p.config != { }) { inherit (p) config; }))
-          (cfg.inBoxPlugins or { });
+            // (lib.optionalAttrs ((p.enable or null) != null) { disabled = !p.enable; })
+            // (lib.optionalAttrs ((p.config or { }) != { }) { inherit (p) config; }))
+          (lib.filterAttrs
+            (id: p: (p.enable or null) != null || (p.config or { }) != { })
+            (cfg.inBoxPlugins or { }));
 
       # ── 权限模式:全局行组(进所有树前部;per-face 行 later-wins 胜)
       globalPermissionMode = cfg.permissionMode or null;

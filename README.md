@@ -392,7 +392,8 @@ export —— 密钥来源与消费者同处一行,CLI/TUI/headless/web 服务�
 | `overlays.default` | `pkgs.dsh` + `pkgs.dshPlugins` |
 | `homeManagerModules.dsh` | `programs.dsh` 模块 |
 | `nixosModules.dsh` | 薄 NixOS 模块 |
-| `checks` | profile 模型验证(结构/正例/负例 fail-loud) |
+| `tests.<sys>` | nix-unit 纯求值套件(92 用例:行组金样/负例 `expectedError`/合并语义;逐测试失败隔离 + diff)。`nix shell nixpkgs#nix-unit -c nix-unit --flake .#tests.x86_64-linux` |
+| `checks` | 构建期验证:真 boot 进树/真执行行为/yq 独立解析器交叉验证 |
 | `checks.<sys>.dsh-options-doc` | 114 option 参考文档,description 真源自动渲染:`nix build .#checks.x86_64-linux.dsh-options-doc` → `options.md` / `options.json`(声明链接指向本仓 GitHub) |
 | `apps.<sys>.dsh-plugins-update` | 插件集合更新器 |
 | `lib.mkDsh` | 独立实例化(不依赖 HM/NixOS) |

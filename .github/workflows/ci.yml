@@ -12,5 +12,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v16
       - name: dsh package build (full installCheck)
         run: nix build .#dsh -L
-      - name: flake checks (profile model + fail-loud)
+      - name: nix-unit tests (pure eval suite, per-test isolation)
+        run: nix shell nixpkgs#nix-unit -c nix-unit --flake .#tests.x86_64-linux --show-trace
+      - name: flake checks (build-time: boot/exec/yq cross-validation)
         run: nix flake check -L

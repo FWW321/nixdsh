@@ -1,23 +1,13 @@
-# 共享夹具:applyPlugins 直调底座、wrapper stub cfg、bundle 构建、
-# activation 物化、in-tree 端到端模板 —— 消各域文件重复
+# 构建期夹具:bundle 构建、activation 物化、in-tree 端到端模板。
+# 纯求值夹具(applyWith/mkFakeCfg)在 tests/fixtures.nix —— 单一真源
 { pkgs, dshLib }:
 
 let
   inherit (pkgs.lib) concatStringsSep;
+  pure = import ../tests/fixtures.nix { inherit pkgs dshLib; };
 
-  applyBase = {
-    plugins = { };
-    profiles = { default = { }; };
-    inBoxPlugins = { };
-  };
-
-  # applyPlugins 直调:公共底座 + overlay(域文件只写差异面)
-  applyWith = cfg: dshLib.applyPlugins {
-    inherit pkgs;
-    cfg = applyBase // cfg;
-  };
-
-  mkBundle = name: plugins:
+  mkBundle =
+    name: plugins:
     dshLib.buildProfile {
       inherit pkgs;
       profile = dshLib.mkProfile { inherit name plugins; };
@@ -38,20 +28,6 @@ let
     "@deepseek-ai/dsh-web-app"
   ];
 
-  # renderWrapper stub cfg:fake package 无 bin.js → upstreamSubcommands
-  # 回落内置名单 {web,plugin}(保留名负例依赖此行为)
-  mkFakeCfg = overrides: {
-    settings = { };
-    telemetry = { mode = null; };
-    providers = { };
-    defaultModel = null;
-    environment = { };
-    dshHome = "/tmp/fake-dsh-home";
-    package = pkgs.hello;
-    defaultProfile = "base";
-    extraArgs = [ ];
-  } // overrides;
-
   # 模拟 activation:bundle 物化进 $DSH_HOME/profiles/(dsh boot 只认用户目录)
   materialize = name: bundle: ''
     home="$TMPDIR/dsh-home"
@@ -65,9 +41,15 @@ let
   # 真 boot --dump-config,断言 entryId insert 进组合树(非 warn-skip)
   # + extraGreps(每条为须成功的 shell 命令)
   inTreeCheck =
-    { checkName, profileName, entryId, cfg, extraGreps ? [ ] }:
+    {
+      checkName,
+      profileName,
+      entryId,
+      cfg,
+      extraGreps ? [ ],
+    }:
     let
-      applied = applyWith cfg;
+      applied = pure.applyWith cfg;
       inc = applied.perProfile.default;
       bundle = dshLib.buildProfile {
         inherit pkgs;
@@ -93,7 +75,8 @@ let
       touch $out
     '';
 in
-{
-  inherit applyWith mkBundle mkFakeCfg materialize inTreeCheck;
+pure
+// {
+  inherit materialize inTreeCheck;
   inherit goodProfile headlessProfile nobaseProfile;
 }
