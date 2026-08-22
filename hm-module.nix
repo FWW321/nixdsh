@@ -68,8 +68,29 @@ let
   # 物化**。旧物化区(带本模块 stamp 的目录)在 activation 一次性清理
   # (迁移);无 stamp 的目录是用户手写/tui 创造,不碰(user 根热发现
   # 照旧 —— includeUserRoot 缺省保留)
+  # skills 源归一:store 子路径(flake source 内部路径,如 ...-source/users/
+  # …/skills/x)→ builtins.path 拷贝为独立 store path。子路径不带 string
+  # context,activation 脚本经 toString 引用它时闭包不追踪 —— 本机 rebuild
+  # 无恙(store 天然全量),nix copy 推送新机则源缺失,cp 必炸(装机彩排
+  # 实测)。独立路径自带 derivation context,字符串引用即入闭包(隔离实验
+  # 验证:toString 嵌入脚本 → path-info -r 命中)。store 根路径与字符串
+  # 来源(输入仓库等,自带 context)原样保留
+  normalizedSkills = lib.mapAttrs
+    (name: s: s // {
+      source =
+        let
+          p = toString s.source;
+          subpathMatch = builtins.match "(${builtins.storeDir}/[a-z0-9]+-[^/]+)/.+" p;
+        in
+        if subpathMatch != null then
+          builtins.path { path = s.source; name = "dsh-skill-${name}"; }
+        else
+          s.source;
+    })
+    cfg.skills;
+
   # skills:validateSkills 校验 + 相对目标名(文件 → <名>.md / 目录 → <名>)
-  skillSources = dshLib.validateSkills cfg.skills;
+  skillSources = dshLib.validateSkills normalizedSkills;
 
   # activation:物化不可变 bundle 为可写副本(dsh 每次 boot 改写 profile 根 cordis.yml)
   activateProfile = name: bundle:
@@ -166,13 +187,13 @@ in
           (name: rel: ''
             _starget="${cfg.dshHome}/skills/${rel}"
             _sstamp="${cfg.dshHome}/skills/.dsh-nix-stamps/${name}"
-            if [ -f "$_sstamp" ] && [ "$(cat "$_sstamp")" = "${toString cfg.skills.${name}.source}" ]; then
+            if [ -f "$_sstamp" ] && [ "$(cat "$_sstamp")" = "${toString normalizedSkills.${name}.source}" ]; then
               :
             else
               rm -rf "$_starget"
-              cp -a "${toString cfg.skills.${name}.source}" "$_starget"
+              cp -a "${toString normalizedSkills.${name}.source}" "$_starget"
               chmod -R u+w "$_starget" 2>/dev/null || true
-              printf '%s' "${toString cfg.skills.${name}.source}" > "$_sstamp"
+              printf '%s' "${toString normalizedSkills.${name}.source}" > "$_sstamp"
             fi
           '')
           skillSources)}
